@@ -1,0 +1,53 @@
+[package]
+name = "calenpomo"
+version = "0.1.0"
+description = "Local-first calendar and pomodoro timer"
+authors = ["Hinoki"]
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+# The `_lib` suffix may seem redundant but it is necessary
+# to make the lib name unique and wouldn't conflict with the bin name.
+# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
+name = "calenpomo_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# The tray is core in Tauri v2, not a plugin, but it is behind a feature flag.
+# `image-png` is deliberately not enabled: the tray reuses the icon that
+# `generate_context!` already embeds as raw RGBA, so nothing decodes a PNG at
+# runtime.
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-dialog = "2"
+# Not target-gated. The app is desktop-only regardless -- `tauri::tray` is
+# itself `cfg(desktop)` -- so gating these would only turn a clear "no tray on
+# mobile" error into a confusing missing-crate one.
+tauri-plugin-notification = "2"
+tauri-plugin-global-shortcut = "2"
+tauri-plugin-autostart = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+thiserror = "2"
+# iCalendar parsing and serialising. The `recurrence` feature is the `rrule`
+# crate underneath, which is what expands RRULE -- no part of RFC 5545 is
+# reimplemented here.
+icalendar = { version = "0.17", features = ["recurrence"] }
+chrono = { version = "0.4", features = ["serde"] }
+# Already in the tree via icalendar's `recurrence` feature, but named here
+# because we resolve `TZID` parameters ourselves when reading a hand-written or
+# imported file.
+chrono-tz = "0.10"
+
+# `fsync` alone does not force a flush to the device on macOS; `F_FULLFSYNC` does.
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3"
+

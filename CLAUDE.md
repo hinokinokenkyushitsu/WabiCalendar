@@ -1,0 +1,172 @@
+# 项目:本地优先的日历 + 番茄钟桌面应用
+
+## 是什么
+
+一个离线可用的桌面应用,包含两个交互上相互独立的功能:
+
+1. **周日历** — 自由拖拽创建/移动时间块(参考 Notion Calendar)
+2. **番茄钟** — 工作时长与休息时长可自定义
+
+两者共享底层的时间记录,因此可以并排展示「计划 vs 实际」。但用户可以只用其中任何一个,
+彼此不存在使用上的依赖。
+
+## 硬约束
+
+- SQLite 仅作为**可重建的索引**,不是真相来源(目前尚未引入依赖)。
+- 不要引入后端服务、账号系统、云同步。这个应用永远不联网。
+
+## 当前进度
+
+不变量 #1、#2、#3 都已实现并被测试锁定。**#4 尚无任何代码**(`Cargo.toml` 里没有
+`notify`),那一条目前仍是唯一的规格来源,不要当成已完成的描述来读。
+
+周日历已可用:`src-tauri/src/calendar/` 读写 `calendar/YYYY-MM.ics`,前端
+`WeekCalendar.vue` 做拖拽创建/移动/改时长。番茄钟与托盘、通知、全局快捷键、开机自启
+都已接好。
+
+「计划 vs 实际」已经打通:`src-tauri/src/sessions.rs` 把每一个结束的番茄钟写进
+`sessions/YYYY-MM-DD.jsonl`,`Timer` 记住段落的墙钟起点并产出 `Ended`(completed /
+aborted / invalidated),`integrations::pump` 落盘后发 `sessions://recorded`。周视图
+每一列左半边是 `.ics` 的计划块、右半边是 session,顶部一条汇总(计划总时长、实际
+专注总时长、完成率)。session 是只读的,右半边不接任何手势。
+
+## 核心架构不变量(不得违反)
+
+### 1. 文件是唯一真相,`.index/` 是可弃缓存
+
+所有 vault 内路径必须经由 `Vault` 的方法取得(`vault/layout.rs` 的 `calendar_file` /
+`sessions_file` / `config_path` / `index_dir`),禁止在别处拼接路径字符串。
+写入顺序永远是「先落 `calendar/`、`sessions/` 下的文件,后更新 `.index/`」。
+
+**验收标准:删除整个 `.index/` 目录并重启,所有数据必须完好无损地重建。**
+新增任何索引后,`vault::tests::deleting_the_index_directory_is_repaired_without_touching_user_data`
+必须仍然通过。
+
+### 2. 计时归 Rust,前端只显示
+
+`src-tauri/src/timer.rs` 同时持有 `Instant`(单调,防改系统时间/NTP 校正)
+和 `SystemTime`(墙钟),每次查询比对两者增量。`Instant` 在休眠期间是否继续走各平台不一致
+(Linux 的 `CLOCK_MONOTONIC` 不计休眠),所以**必须靠墙钟差值检测休眠**:墙钟跳跃远大于
+单调增量即判定该番茄钟作废并提示用户,不要若无其事地继续倒计时。
+
+前端禁止用 `setInterval` 累加计数,只能 `invoke('timer_state')` 每秒拉取计算结果;
+composable 放 `src/composables/useTimer.ts`。计时状态需持久化,冷启动能恢复现场。
+
+### 3. 用户数据写入必须经过 `fs_atomic`
+
+所有写入必须调用 `fs_atomic::atomic_write` 或 `fs_atomic::append_jsonl`,所有 JSONL 读取
+必须调用 `fs_atomic::read_jsonl`。禁止在 `fs_atomic.rs` 之外出现 `fs::write`、
+`File::create`、`OpenOptions`,也禁止自己按 `\n` 切分。
+(例外:只读的 `fs::read_to_string`,如 `settings.rs`、`vault/mod.rs` 读配置,
+`calendar/store.rs` 读 `.ics`;只读的 `fs::read_dir`,如 `calendar/store.rs` 列月份文件;
+以及测试代码。)
+
+### 4. 文件监听不得自激 —— 尚未实现
+
+实现时用 `notify` crate,事件 debounce 约 300ms。注意:
+
+- 很多编辑器保存文件的方式是「写临时文件 + rename」,收到的是 delete + create
+  而不是 modify,要能正确识别为修改。
+- 本应用自身写入触发的事件必须被抑制,否则会无限循环。抑制逻辑要覆盖
+  `fs_atomic::temp_path` 生成的 `.<name>.tmp-*` 文件。
+
+## 数据格式
+
+**日历** — 标准 iCalendar(`.ics`),用 `icalendar` crate(`recurrence` feature,
+底层即 `rrule`)解析与序列化。不要手写解析器,不要自己实现 RFC 5545。
+这样用户可以直接把文件导入 Google Calendar 或 Apple 日历。
+
+**番茄钟记录** — JSONL,一行一条(`sessions::Session`,盘上是 snake_case;发给前端的
+`SessionView` 是 camelCase,两者故意分开):
+
+```json
+{"id":"...","kind":"work","planned_sec":1500,"actual_sec":1500,"started_at":"2026-07-23T14:00:00+09:00","ended_at":"2026-07-23T14:25:00+09:00","outcome":"completed","label":"写论文"}
+```
+
+`outcome` 取值:`completed` | `aborted` | `invalidated`(休眠导致)。
+时间戳一律带时区偏移量的 RFC 3339 格式。
+
+## 实现期决策(代码里已定,改动前先读)
+
+**JSONL 语义** — 换行符是提交标记,不是「能否解析」:`read_jsonl` 无条件丢弃最后一个分片,
+即使末行是合法 JSON 但缺 `\n` 也算未提交(测试 `a_truncated_record_that_parses_is_still_discarded`)。
+写路径**永不销毁字节**:遇到半行时 `append_jsonl` 补一个 `\n` 隔开,残片原样留在盘上。
+坏行分三类:`records` / `corrupt`(带 1-based 行号)/ `truncated_tail`;空白行静默跳过,
+不计入 `corrupt`;容忍 CRLF。`JsonlRead` 手写 `Default` 是为了不给 `T` 强加 `Default` 约束。
+
+**落盘** — macOS 上 `sync_all` 只把数据交给盘的写缓存,因此额外调 `F_FULLFSYNC`
+(target-specific 的 `libc` 依赖),返回值**故意忽略**——网络挂载会拒绝。
+临时文件名 `.{name}.tmp-{pid}-{nanos}-{seq}`,带点前缀且**故意不以 `.ics`/`.jsonl` 结尾**,
+这样按扩展名扫目录的代码永远不会把崩溃残留当成 vault 数据。
+`stage` 返回即关闭句柄,因为 Windows 不允许 rename 打开中的文件;`sync_parent_dir` 在非 unix 上是空实现。
+
+**日历分片与重复事件** — 事件存在 DTSTART **本地时间**所属月份的 `.ics` 里,
+所以 `YearMonth::of` 要传时区(`Calendars` 因此对 `TimeZone` 泛型,测试传固定偏移,
+生产传 `Local`)。跨月移动**先写目标文件再重写源文件**:崩在中间是「重复」而不是「丢失」。
+消解重复用 RFC 5545 自己的办法 `SEQUENCE` → `LAST-MODIFIED` → `DTSTAMP`(`ics::revision`),
+**不能**用「哪份待在自己该在的分片里」——残留那份带的是旧 DTSTART,一样名正言顺。
+`update` 就地改 VEVENT 而非重建,否则手写的 DESCRIPTION / VALARM / X- 属性会被抹掉。
+写只产出 UTC(`...Z`)形式,读四种形式全收。RRULE 只展开不编辑
+(`AppError::RecurringNotEditable`),要改规则请直接编辑 `.ics`。
+`range` 会扫所有 ≤ 窗口末月的分片,因为重复事件的 DTSTART 可能在很早的月份;
+文件小,先不给 `.index/` 加东西。
+
+**Vault 与错误** — `Vault::open` 只补建骨架,**绝不创建根目录**:外置盘没挂载时若自动新建,
+用户看到的就是「数据没了」。配置解析失败是硬错误,`Vault::open` 末尾那次 `read_config()`
+纯粹为了失败时报错(看着像废代码,是故意的),`Settings::load` 同样立场。
+`AppError` 是单一扁平枚举,不分模块错误类型;手写 `Serialize` 把错误压成字符串给前端;
+`IoResultExt::at` 强制每个 io 错误带上路径。
+`set_vault` 必须 `Vault::open` 成功后才 `Settings::save`,否则下次启动会卡在一个打不开的路径上。
+`VaultStatus` 是三态 tagged enum,`missing` 是正常状态而非错误,前端手工镜像在 `src/types/vault.ts`。
+
+## 代码约定
+
+- Rust:`cargo fmt` 与 `cargo clippy` 必须干净(命令见下)。
+- 错误处理用 `thiserror`,不要 `unwrap()`。**已知的有意例外**:`commands.rs` 中 Mutex 中毒时
+  `unwrap_or_else(|e| e.into_inner())` 恢复而非传播——别处的 panic 不说明这份数据有问题。
+- Vue:组合式 API,`<script setup>`。业务逻辑抽成 composable,不要堆在组件里。
+- 前后端共享的类型定义**手工维护**在 `src/types/`,与 Rust 结构体一一对应。不要上代码生成。
+- 提交信息用 Conventional Commits。
+
+## 常用命令
+
+仓库根目录**没有** `Cargo.toml`,裸跑 `cargo test` 会失败,必须带 `--manifest-path`:
+
+```bash
+cargo test --manifest-path src-tauri/Cargo.toml                              # Rust 测试
+cargo fmt --manifest-path src-tauri/Cargo.toml -- --check                    # 检查格式
+cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+npm run tauri dev        # 开发环境;beforeDevCommand 会自己起 vite,不要另开
+npm run typecheck        # 前端没有 ESLint/Prettier,lint 就是这个
+npm test                 # vitest,只测 src/lib/ 下的纯函数
+```
+
+## 明确不做的事(v1)
+
+不要主动实现以下任何一项,即使看起来顺手:
+
+- 账号、登录、云同步、任何网络请求
+- 日视图、月视图、议程视图 —— **只做周视图**
+- 提醒/闹钟系统(番茄钟结束通知除外)
+- 标签系统、看板、笔记、任务依赖
+- 主题切换、设置面板(除非任务里明确要求)
+- CRDT 或任何冲突合并机制
+- 在 UI 里创建/编辑重复事件(展开渲染已做,`RECURRENCE-ID` 覆盖是 v2 的事)
+
+## 待确认(别自己拍板,先问我)
+
+- `SCHEMA_VERSION` 常量与 `DEFAULT_CONFIG` 里硬写的 `schema_version = 1` 是两份,版本一升就会漂。
+- `tauri.conf.json` 的 `"csp": null` 是脚手架默认值还是有意设的。
+- `opening_a_fresh_directory_builds_the_whole_skeleton` 断言 `report.created` 的精确顺序,是否算契约。
+- 前端不加 ESLint/Prettier 是刻意还是未做(vitest 已经加了,lint 仍然没有)。
+- `.index/cache.db` 这个文件名代码里还不存在,是否还作数。
+- `bundle.targets: "all"` 对自用应用是否必要。
+- 全天(DATE 值)事件目前渲染在日期头下面一条只读窄条里,这是实现时自己定的,要不要保留。
+- 周视图固定周一起始,没有做成可配置。
+
+## 工作方式
+
+- 动手写代码前先说明你的计划,等我确认。
+- 一次只做一件事。不要顺手重构无关代码。
+- 涉及上述四条不变量的地方,写测试。
+- 不确定就问,不要猜。

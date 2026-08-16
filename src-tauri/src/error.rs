@@ -1,0 +1,92 @@
+//! One error type for the whole backend.
+
+use std::path::{Path, PathBuf};
+
+pub type Result<T> = std::result::Result<T, AppError>;
+
+#[derive(Debug, thiserror::Error)]
+pub enum AppError {
+    #[error("{}: {source}", path.display())]
+    Io {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("vault directory is missing or unreadable: {}", .0.display())]
+    VaultMissing(PathBuf),
+
+    #[error("not a directory: {}", .0.display())]
+    NotADirectory(PathBuf),
+
+    #[error("{} is not valid TOML: {source}", path.display())]
+    TomlDecode {
+        path: PathBuf,
+        #[source]
+        source: toml::de::Error,
+    },
+
+    #[error("could not encode TOML: {0}")]
+    TomlEncode(#[from] toml::ser::Error),
+
+    #[error("could not encode JSON: {0}")]
+    JsonEncode(#[from] serde_json::Error),
+
+    #[error("{} is not valid iCalendar: {reason}", path.display())]
+    IcsDecode { path: PathBuf, reason: String },
+
+    /// No vault has been chosen yet, or the one we had went away. The frontend
+    /// already renders that as a prompt rather than a failure.
+    #[error("no vault is open")]
+    NoVault,
+
+    #[error("no event with uid {0:?}")]
+    EventNotFound(String),
+
+    #[error("an event has to end after it starts")]
+    BackwardsEvent,
+
+    /// v1 renders occurrences of a repeating event but will not edit one: doing
+    /// that properly means writing `RECURRENCE-ID` overrides.
+    #[error("a repeating event can only be changed by editing its RRULE in the .ics file")]
+    RecurringNotEditable,
+
+    #[error("{0}")]
+    Tauri(#[from] tauri::Error),
+
+    #[error("{0:?} is not a key combination we can register")]
+    InvalidShortcut(String),
+
+    /// An OS integration refused. Never fatal: the caller records it and the app
+    /// carries on without that one capability.
+    #[error("{feature} is unavailable: {reason}")]
+    Integration {
+        feature: &'static str,
+        reason: String,
+    },
+}
+
+/// Tauri commands hand their error back to the frontend as a string.
+impl serde::Serialize for AppError {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(&self.to_string())
+    }
+}
+
+/// `std::io::Error` does not carry the path it failed on, which makes bare I/O
+/// failures nearly impossible to act on. This puts it back.
+pub trait IoResultExt<T> {
+    fn at(self, path: impl AsRef<Path>) -> Result<T>;
+}
+
+impl<T> IoResultExt<T> for std::io::Result<T> {
+    fn at(self, path: impl AsRef<Path>) -> Result<T> {
+        self.map_err(|source| AppError::Io {
+            path: path.as_ref().to_path_buf(),
+            source,
+        })
+    }
+}

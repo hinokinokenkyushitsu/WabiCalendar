@@ -1,0 +1,85 @@
+/*
+ * The whole palette, in one place.
+ *
+ * Every colour in the app is a token declared here; no component may write a
+ * literal. Light and dark are the same token names with different values, so
+ * nothing downstream ever branches on the scheme — the only place that knows
+ * a scheme exists is the media query below.
+ *
+ * `color-scheme` is what makes the native bits follow along: checkbox,
+ * number-input spinners, scrollbars. Without it those stay light on a dark
+ * background and the seams show immediately.
+ *
+ * Warm greys throughout, deliberately. Neutral greys mixed against a cream
+ * background read as dirty rather than quiet, so borders and grid lines are
+ * derived from `--text` (which is itself warm) instead of from black.
+ */
+:root {
+  color-scheme: light dark;
+
+  /* Paper. `--surface` is *lighter* than `--bg` so a block on the grid reads
+     as something laid on the desk rather than a hole cut into it. */
+  --bg: #f0eee6;
+  --surface: #faf9f5;
+  --text: #141413;
+
+  --border: #dedcd1;
+  --border-strong: #c4c0b0;
+
+  /* "Now", and only now: the current-time line, today's column, today's date.
+     Nothing else earns this colour.
+
+     `--accent` is the fill — a 1px rule, a dot, a 6% wash — where being bright
+     is the point. `--accent-ink` is the same terracotta taken down far enough
+     to clear 4.5:1 as *text* on cream, which the fill value does not (3.6:1).
+     Two tokens rather than one compromise value that is muddy as a fill and
+     still marginal as text. On the dark ground the fill already reads at
+     5.3:1, so there the two collapse back into one. */
+  --accent: #c15f3c;
+  --accent-ink: #a8492a;
+
+  /* What actually happened. Kept a full hue away from `--accent` so a session
+     block and the now-line can never be read as the same thing, and low
+     enough in saturation that a week of them doesn't shout. */
+  --actual: #6f7f5c;
+
+  /* All three are text-only, so they are picked for contrast on cream, not for
+     how they look as a swatch. */
+  --ok: #4e6639;
+  --warn: #8a5d1a;
+  --danger: #a33a28;
+
+  --shadow-drag: 0 2px 8px rgb(0 0 0 / 0.18);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1f1e1d;
+    --surface: #2b2a28;
+    --text: #f5f4ef;
+
+    --border: #3a3936;
+    --border-strong: #55534e;
+
+    /* All four semantic hues lift on a dark ground; the light values are far
+       too muddy to carry at this contrast. */
+    --accent: #d97757;
+    --accent-ink: #d97757;
+    --actual: #8ba172;
+
+    --ok: #8bab6e;
+    --warn: #d4a453;
+    --danger: #e5806a;
+
+    --shadow-drag: 0 2px 10px rgb(0 0 0 / 0.45);
+  }
+}
+
+body {
+  /* `main` is already `height: 100vh`, so the default body margin was pushing
+     the document past the viewport and putting a scrollbar on the window. */
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  accent-color: var(--accent);
+}
