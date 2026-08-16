@@ -30,13 +30,20 @@ aborted / invalidated),`integrations::pump` 落盘后发 `sessions://recorded`�
 每一列左半边是 `.ics` 的计划块、右半边是 session,顶部一条汇总(计划总时长、实际
 专注总时长、完成率)。session 是只读的,右半边不接任何手势。
 
+CLI(`calpo`)只做完了**只读的一半**:`calpo today` 与 `calpo log --week [N]`,加上
+vault 写锁。`calpo start` 与它需要的本地 IPC(GUI 在跑时由 GUI 代跑)**尚未实现**。
+`--vault <PATH>` 与 `CALENPOMO_VAULT` 只对单次调用生效,永远不回写 `settings.toml`。
+
 ## 核心架构不变量(不得违反)
 
 ### 1. 文件是唯一真相,`.index/` 是可弃缓存
 
 所有 vault 内路径必须经由 `Vault` 的方法取得(`vault/layout.rs` 的 `calendar_file` /
-`sessions_file` / `config_path` / `index_dir`),禁止在别处拼接路径字符串。
+`sessions_file` / `config_path` / `index_dir` / `lock_path`),禁止在别处拼接路径字符串。
 写入顺序永远是「先落 `calendar/`、`sessions/` 下的文件,后更新 `.index/`」。
+
+写锁文件 `.index/write.lock` 也归这一条管:它没有内容,删掉不丢任何东西,取锁时按需
+重建。放 `.index/` 而不是配置目录,是因为锁保护的是「这些文件」而不是「这台机器」。
 
 **验收标准:删除整个 `.index/` 目录并重启,所有数据必须完好无损地重建。**
 新增任何索引后,`vault::tests::deleting_the_index_directory_is_repaired_without_touching_user_data`
@@ -60,6 +67,12 @@ composable 放 `src/composables/useTimer.ts`。计时状态需持久化,冷启�
 (例外:只读的 `fs::read_to_string`,如 `settings.rs`、`vault/mod.rs` 读配置,
 `calendar/store.rs` 读 `.ics`;只读的 `fs::read_dir`,如 `calendar/store.rs` 列月份文件;
 以及测试代码。)
+
+跨进程互斥同样归这个模块:`fs_atomic::lock_exclusive` 是唯一持有锁文件句柄的地方,
+所以「`OpenOptions` 不出 `fs_atomic.rs`」这条不需要开新例外。调用方拿的是
+`Vault::lock()`(等 `LOCK_WAIT`)或 `Vault::try_lock()`(试一次就走)。
+**锁按「逻辑操作」持有,不是按单次 `atomic_write`** —— 跨月移动事件是两次写,
+读者绝不能撞进中间那个「两个分片里都有」的窗口。
 
 ### 4. 文件监听不得自激 —— 尚未实现
 
@@ -119,6 +132,24 @@ composable 放 `src/composables/useTimer.ts`。计时状态需持久化,冷启�
 `set_vault` 必须 `Vault::open` 成功后才 `Settings::save`,否则下次启动会卡在一个打不开的路径上。
 `VaultStatus` 是三态 tagged enum,`missing` 是正常状态而非错误,前端手工镜像在 `src/types/vault.ts`。
 
+**写锁与 CLI** — 锁用 `std::fs::File::{lock, try_lock, unlock}`(Rust 1.89 起进标准库,
+所以 `rust-version = "1.89"`),**不引 `fs4`/`fs2`**。锁是 advisory 的:它只约束本项目
+自己的进程,对文本编辑器无效 —— 这是有意的,这些文件本来就该能手改。
+GUI 的 ticker 用 `try_lock`(等 0 秒):`drain_sessions` 每秒跑一次,为了等 CLI 而卡住
+就等于停表,抢不到就把记录留在队列里下一秒再来。交互式写入用 `lock()` 等 5 秒。
+注意 unix 上 flock 归「打开的文件描述」所有,同进程再取一次同样会互斥,所以这两个
+方法**不可嵌套**;GUI 侧靠自己的 vault Mutex 串行化。
+
+CLI 与 GUI 共用一个 crate,靠默认开启的 `gui` feature 分开:`gui` 关掉后
+tauri / tauri-build / 四个插件全部不进依赖树,`calpo` 因此不需要 webkit2gtk 之类的系统
+依赖。新代码放 `vault` / `calendar` / `sessions` / `timer` / `fs_atomic` / `cli` 时,
+**不许让它们长出对 tauri 的依赖**。`cli/report.rs` 的汇总口径是 `src/lib/summary.ts`
+的镜像(计划块按窗口裁剪、session 按起点整取、all-day 不计、break 与 invalidated 不算
+focus),改一边必须改另一边。CLI 输出刻意全 ASCII 且把变宽的用户文本放在每行最后:
+`–` `·` `—` 都是 East Asian Ambiguous,CJK 终端下会画成双宽而把表格拉歪。
+`config_dir()` 手工复刻 Tauri 的 `app_config_dir()`(即 `dirs::config_dir()/${identifier}`),
+`APP_IDENTIFIER` 必须和 `tauri.conf.json` 的 `identifier` 保持一致。
+
 ## 代码约定
 
 - Rust:`cargo fmt` 与 `cargo clippy` 必须干净(命令见下)。
@@ -139,6 +170,14 @@ cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 npm run tauri dev        # 开发环境;beforeDevCommand 会自己起 vite,不要另开
 npm run typecheck        # 前端没有 ESLint/Prettier,lint 就是这个
 npm test                 # vitest,只测 src/lib/ 下的纯函数
+```
+
+CLI 那一半要单独再跑一遍 —— `gui` 关掉后是另一套编译产物,只跑默认 feature 是测不到的:
+
+```bash
+cargo build  --manifest-path src-tauri/Cargo.toml --bin calpo --no-default-features
+cargo test   --manifest-path src-tauri/Cargo.toml --no-default-features
+cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --no-default-features -- -D warnings
 ```
 
 ## 明确不做的事(v1)

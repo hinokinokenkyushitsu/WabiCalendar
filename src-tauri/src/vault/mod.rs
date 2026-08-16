@@ -3,15 +3,25 @@
 
 mod layout;
 
-pub use layout::{CALENDAR_DIR, CONFIG_FILE, INDEX_DIR, SESSIONS_DIR};
+pub use layout::{CALENDAR_DIR, CONFIG_FILE, INDEX_DIR, LOCK_FILE, SESSIONS_DIR};
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
 use crate::error::{AppError, IoResultExt, Result};
-use crate::fs_atomic::atomic_write;
+use crate::fs_atomic::{atomic_write, lock_exclusive, FileLock};
+
+/// How long an interactive write waits for another process to finish before
+/// giving up.
+///
+/// A vault write is a few milliseconds of work, so anything approaching this
+/// means the other side is wedged rather than busy — at which point saying so is
+/// better than hanging. Callers that must not block at all (the app's ticker)
+/// pass [`Duration::ZERO`] to [`Vault::try_lock`] instead.
+pub const LOCK_WAIT: Duration = Duration::from_secs(5);
 
 /// Bumped when the on-disk layout changes in a way that needs migrating.
 pub const SCHEMA_VERSION: u32 = 1;
@@ -90,6 +100,28 @@ impl Vault {
         }
 
         Ok(report)
+    }
+
+    /// Claim the right to write to this vault, waiting up to [`LOCK_WAIT`].
+    ///
+    /// Every write path takes this: the app around a whole calendar or session
+    /// operation, the CLI around its own. Held for the *logical* operation and
+    /// not for each `atomic_write`, because moving an event across a month
+    /// boundary is two writes that a reader must never catch between — the
+    /// window where the event exists in both shards is exactly what the lock is
+    /// closing.
+    ///
+    /// Recreates `.index/` if it has gone missing, so that deleting that
+    /// directory out from under a running app costs a directory and not a write.
+    pub fn lock(&self) -> Result<FileLock> {
+        lock_exclusive(&self.lock_path(), LOCK_WAIT)
+    }
+
+    /// One attempt, no waiting. [`AppError::VaultBusy`] means "come back later",
+    /// which for the app's ticker means leaving the record queued for the next
+    /// one.
+    pub fn try_lock(&self) -> Result<FileLock> {
+        lock_exclusive(&self.lock_path(), Duration::ZERO)
     }
 
     pub fn read_config(&self) -> Result<VaultConfig> {
@@ -180,6 +212,57 @@ mod tests {
 
         assert!(matches!(err, AppError::VaultMissing(_)));
         assert!(!gone.exists(), "the missing vault was silently created");
+    }
+
+    /// Invariant #1: the lock is derived state like everything else under
+    /// `.index/`, so losing that directory costs a directory and not a write.
+    #[test]
+    fn the_write_lock_lives_inside_the_disposable_index_directory() {
+        let dir = TempDir::new().expect("tempdir");
+        let (vault, _) = Vault::open(dir.path()).expect("open");
+
+        assert_eq!(
+            vault.lock_path().parent(),
+            Some(vault.index_dir().as_path())
+        );
+
+        drop(vault.lock().expect("lock"));
+        fs::remove_dir_all(vault.index_dir()).expect("nuke index");
+
+        // No reopen, no `ensure_skeleton`: taking the lock has to stand it back
+        // up on its own, or a vault whose index was cleared mid-session would
+        // refuse every write until a restart.
+        drop(vault.lock().expect("lock after the index was deleted"));
+        assert!(vault.lock_path().is_file());
+    }
+
+    /// Two processes on one vault, which is what the CLI and the app are.
+    #[test]
+    fn two_handles_on_one_vault_exclude_each_other() {
+        let dir = TempDir::new().expect("tempdir");
+        let (app, _) = Vault::open(dir.path()).expect("open");
+        let (cli, _) = Vault::open(dir.path()).expect("open again");
+
+        let held = app.lock().expect("app takes the lock");
+
+        let err = cli.try_lock().expect_err("cli should be shut out");
+        assert!(matches!(err, AppError::VaultBusy(_)), "{err:?}");
+
+        drop(held);
+        cli.try_lock().expect("cli gets in once the app is done");
+    }
+
+    /// Separate vaults are separate locks; one busy vault must not stall
+    /// another.
+    #[test]
+    fn locking_one_vault_leaves_another_free() {
+        let first = TempDir::new().expect("tempdir");
+        let second = TempDir::new().expect("tempdir");
+        let (first, _) = Vault::open(first.path()).expect("open");
+        let (second, _) = Vault::open(second.path()).expect("open");
+
+        let _held = first.lock().expect("lock the first");
+        second.try_lock().expect("the second is unaffected");
     }
 
     #[test]

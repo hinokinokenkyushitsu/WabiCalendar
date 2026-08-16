@@ -125,6 +125,14 @@ impl AppState {
         let Some(vault) = self.vault().as_ref().cloned() else {
             return 0;
         };
+
+        // A single attempt, never a wait: this runs on the one-second ticker,
+        // and a tick parked behind the CLI's write is a countdown that stops.
+        // Losing the race costs nothing -- the records stay queued and the next
+        // tick tries again, which is the same path an unplugged drive takes.
+        let Ok(_lock) = vault.try_lock() else {
+            return 0;
+        };
         let sessions = Sessions::local(&vault);
 
         // Stopping at the first failure rather than skipping past it: these
@@ -145,11 +153,20 @@ impl AppState {
 
     /// Run `job` against the open vault, or fail if there is not one.
     ///
-    /// The lock is held for the whole job so that two calendar writes cannot
-    /// interleave a read-modify-write on the same shard.
+    /// Two locks, for two different neighbours. The mutex is held for the whole
+    /// job so that two calendar writes in *this* process cannot interleave a
+    /// read-modify-write on the same shard. The vault's file lock does the same
+    /// against the `calpo` binary, which shares the files and not the mutex.
+    ///
+    /// Reads take the exclusive lock too. It costs a few milliseconds and buys
+    /// the guarantee that a `calendar_range` never lands inside a cross-month
+    /// move, where the event is briefly present in both shards.
     fn with_vault<T>(&self, job: impl FnOnce(&Vault) -> Result<T>) -> Result<T> {
         match self.vault().as_ref() {
-            Some(vault) => job(vault),
+            Some(vault) => {
+                let _lock = vault.lock()?;
+                job(vault)
+            }
             None => Err(AppError::NoVault),
         }
     }

@@ -1,18 +1,28 @@
 pub mod calendar;
-pub mod commands;
+pub mod cli;
 pub mod error;
 pub mod fs_atomic;
-pub mod integrations;
 pub mod sessions;
 pub mod settings;
 pub mod timer;
 pub mod vault;
 
+// The Tauri half. Everything above this line is shared with the `calpo` binary
+// and has to keep building with Tauri absent from the dependency tree entirely.
+#[cfg(feature = "gui")]
+pub mod commands;
+#[cfg(feature = "gui")]
+pub mod integrations;
+
+#[cfg(feature = "gui")]
 use std::time::Duration;
 
+#[cfg(feature = "gui")]
 use tauri::{Manager, WindowEvent};
 
+#[cfg(feature = "gui")]
 use crate::commands::AppState;
+#[cfg(feature = "gui")]
 use crate::integrations::tray;
 
 /// How often the backend re-reads its own clock.
@@ -21,8 +31,10 @@ use crate::integrations::tray;
 /// firing while the window is hidden or closed. The frontend polls on its own
 /// schedule; both go through `integrations::pump`, which is why they cannot
 /// disagree or double-fire.
+#[cfg(feature = "gui")]
 const TICK: Duration = Duration::from_secs(1);
 
+#[cfg(feature = "gui")]
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app = tauri::Builder::default()

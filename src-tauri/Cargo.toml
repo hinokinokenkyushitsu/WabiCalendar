@@ -4,6 +4,10 @@ version = "0.1.0"
 description = "Local-first calendar and pomodoro timer"
 authors = ["Hinoki"]
 edition = "2021"
+# `File::lock` / `try_lock` / `unlock`, which the vault lock is built on, were
+# stabilised in 1.89. Stated so an older toolchain fails with that sentence
+# rather than with an unresolved-method error.
+rust-version = "1.89"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -14,22 +18,52 @@ edition = "2021"
 name = "calenpomo_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+# The desktop app.
+[[bin]]
+name = "calenpomo"
+path = "src/main.rs"
+required-features = ["gui"]
+
+# The CLI, reading and writing the same vault. Deliberately outside the `gui`
+# feature: `cargo build --bin calpo --no-default-features` has to produce a
+# working binary on a machine with none of Tauri's system dependencies
+# installed (webkit2gtk and friends on Linux), which is what lets CI build it
+# cheaply and lets a user install it without the app.
+[[bin]]
+name = "calpo"
+path = "src/bin/calpo.rs"
+
+[features]
+default = ["gui"]
+# Everything that needs Tauri: the window, the commands, the four OS
+# integrations. The vault, calendar, sessions, timer and fs_atomic modules are
+# deliberately *not* in here -- they are what the CLI shares with the app, and
+# nothing in them may grow a Tauri dependency.
+gui = [
+    "dep:tauri",
+    "dep:tauri-build",
+    "dep:tauri-plugin-dialog",
+    "dep:tauri-plugin-notification",
+    "dep:tauri-plugin-global-shortcut",
+    "dep:tauri-plugin-autostart",
+]
+
 [build-dependencies]
-tauri-build = { version = "2", features = [] }
+tauri-build = { version = "2", features = [], optional = true }
 
 [dependencies]
 # The tray is core in Tauri v2, not a plugin, but it is behind a feature flag.
 # `image-png` is deliberately not enabled: the tray reuses the icon that
 # `generate_context!` already embeds as raw RGBA, so nothing decodes a PNG at
 # runtime.
-tauri = { version = "2", features = ["tray-icon"] }
-tauri-plugin-dialog = "2"
+tauri = { version = "2", features = ["tray-icon"], optional = true }
+tauri-plugin-dialog = { version = "2", optional = true }
 # Not target-gated. The app is desktop-only regardless -- `tauri::tray` is
 # itself `cfg(desktop)` -- so gating these would only turn a clear "no tray on
 # mobile" error into a confusing missing-crate one.
-tauri-plugin-notification = "2"
-tauri-plugin-global-shortcut = "2"
-tauri-plugin-autostart = "2"
+tauri-plugin-notification = { version = "2", optional = true }
+tauri-plugin-global-shortcut = { version = "2", optional = true }
+tauri-plugin-autostart = { version = "2", optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "0.8"
@@ -43,6 +77,17 @@ chrono = { version = "0.4", features = ["serde"] }
 # because we resolve `TZID` parameters ourselves when reading a hand-written or
 # imported file.
 chrono-tz = "0.10"
+# The CLI's argument parser. Not optional: keeping it unconditional is what lets
+# the documented `cargo test` command cover the CLI without a second invocation.
+clap = { version = "4", features = ["derive"] }
+# How the CLI finds the same config directory the app uses. Tauri's
+# `app_config_dir()` is `dirs::config_dir()/${identifier}` and nothing more
+# (tauri/src/path/desktop.rs), so this reproduces it exactly rather than
+# guessing at platform conventions. Already in the tree via Tauri itself.
+dirs = "6"
+
+# Nothing here for the vault lock on purpose: `File::lock`/`try_lock`/`unlock`
+# have been in std since Rust 1.89, so `fs4` and friends would buy nothing.
 
 # `fsync` alone does not force a flush to the device on macOS; `F_FULLFSYNC` does.
 [target.'cfg(target_os = "macos")'.dependencies]

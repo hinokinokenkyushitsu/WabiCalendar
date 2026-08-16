@@ -40,6 +40,16 @@ pub enum AppError {
     #[error("no vault is open")]
     NoVault,
 
+    /// The CLI equivalent of [`AppError::NoVault`]. Separate because it is the
+    /// one place the answer is a sentence the user can act on rather than a
+    /// state the UI draws.
+    #[error("no vault configured — open CalenPomo and choose one, or pass --vault <PATH>")]
+    VaultUnset,
+
+    /// The platform gave us nowhere to look for `settings.toml`.
+    #[error("could not determine this platform's configuration directory")]
+    NoConfigDir,
+
     #[error("no event with uid {0:?}")]
     EventNotFound(String),
 
@@ -51,6 +61,14 @@ pub enum AppError {
     #[error("a repeating event can only be changed by editing its RRULE in the .ics file")]
     RecurringNotEditable,
 
+    /// Another process is holding the vault's write lock.
+    ///
+    /// Always transient — the holder releases it as soon as its write finishes —
+    /// so this is worth retrying, unlike every other variant here.
+    #[error("another CalenPomo process is writing to {}; try again", .0.display())]
+    VaultBusy(PathBuf),
+
+    #[cfg(feature = "gui")]
     #[error("{0}")]
     Tauri(#[from] tauri::Error),
 
