@@ -7,10 +7,17 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
+# Build output and dependencies
+# Rust's `target/` and Tauri's generated `gen/schemas` are ignored by
+# src-tauri/.gitignore, next to what produces them.
 node_modules
 dist
 dist-ssr
 *.local
+
+# Tooling caches
+coverage
+*.tsbuildinfo
 
 # Editor directories and files
 .vscode/*
@@ -22,3 +29,6 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Machine-local Claude Code permissions, not project configuration
+.claude/settings.local.json
