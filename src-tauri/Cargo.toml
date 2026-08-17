@@ -4,6 +4,10 @@ version = "0.1.0"
 description = "Local-first calendar and pomodoro timer"
 authors = ["Hinoki"]
 edition = "2021"
+# With two binaries in the package, a bare `cargo run` has no way to choose --
+# and `npm run tauri dev` runs exactly that. The app is what "run this project"
+# means; `calpo` is reached with `--bin calpo`.
+default-run = "calenpomo"
 # `File::lock` / `try_lock` / `unlock`, which the vault lock is built on, were
 # stabilised in 1.89. Stated so an older toolchain fails with that sentence
 # rather than with an unresolved-method error.
@@ -85,6 +89,8 @@ clap = { version = "4", features = ["derive"] }
 # (tauri/src/path/desktop.rs), so this reproduces it exactly rather than
 # guessing at platform conventions. Already in the tree via Tauri itself.
 dirs = "6"
+interprocess = "2.4.3"
+ctrlc = "3.5.2"
 
 # Nothing here for the vault lock on purpose: `File::lock`/`try_lock`/`unlock`
 # have been in std since Rust 1.89, so `fs4` and friends would buy nothing.

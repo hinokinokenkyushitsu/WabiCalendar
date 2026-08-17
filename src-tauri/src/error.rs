@@ -61,6 +61,29 @@ pub enum AppError {
     #[error("a repeating event can only be changed by editing its RRULE in the .ics file")]
     RecurringNotEditable,
 
+    /// The local socket between `calpo` and the running app would not
+    /// cooperate. `endpoint` is a socket path on unix and a pipe name on
+    /// Windows.
+    #[error("{endpoint}: {source}")]
+    Ipc {
+        endpoint: String,
+        #[source]
+        source: std::io::Error,
+    },
+
+    /// Something answered on that socket but did not speak the protocol —
+    /// realistically a `calpo` and an app from different versions.
+    #[error("unexpected answer from the CalenPomo app: {0}")]
+    IpcProtocol(String),
+
+    /// The app understood the request and said no.
+    ///
+    /// Never a reason to fall back to doing the thing ourselves: something *is*
+    /// listening, so a second timer beside it would be exactly the collision the
+    /// socket exists to prevent.
+    #[error("CalenPomo declined: {0}")]
+    IpcRefused(String),
+
     /// Another process is holding the vault's write lock.
     ///
     /// Always transient — the holder releases it as soon as its write finishes —

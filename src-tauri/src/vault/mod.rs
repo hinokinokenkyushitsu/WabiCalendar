@@ -49,6 +49,22 @@ pub struct Vault {
     root: PathBuf,
 }
 
+/// Whether two paths name the same vault.
+///
+/// `calpo --vault ./MyVault` and the app's remembered `/Users/me/MyVault` are
+/// one directory spelled two ways, so both sides are resolved before being
+/// compared. When a path cannot be resolved — an unplugged drive, a directory
+/// that is not there — the fallback is to compare what was written, which errs
+/// towards "different": the caller uses this to decide whether the app may
+/// write a session on the CLI's behalf, and a wrong "same" would file the
+/// pomodoro somewhere the user never named.
+pub fn same_vault(a: &Path, b: &Path) -> bool {
+    match (fs::canonicalize(a), fs::canonicalize(b)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => a == b,
+    }
+}
+
 impl Vault {
     pub fn root(&self) -> &Path {
         &self.root
@@ -263,6 +279,35 @@ mod tests {
 
         let _held = first.lock().expect("lock the first");
         second.try_lock().expect("the second is unaffected");
+    }
+
+    /// The app decides whether to record a CLI pomodoro by comparing the two
+    /// sides' idea of the vault, and the two arrive spelled differently.
+    #[test]
+    fn one_vault_spelled_two_ways_is_still_one_vault() {
+        let dir = TempDir::new().expect("tempdir");
+        let (vault, _) = Vault::open(dir.path()).expect("open");
+        let roundabout = vault.calendar_dir().join("..");
+
+        assert!(same_vault(vault.root(), &roundabout));
+        assert!(same_vault(vault.root(), vault.root()));
+    }
+
+    #[test]
+    fn two_different_vaults_are_not_confused_for_each_other() {
+        let first = TempDir::new().expect("tempdir");
+        let second = TempDir::new().expect("tempdir");
+
+        assert!(!same_vault(first.path(), second.path()));
+        // Neither exists, so neither resolves; the comparison still has to work.
+        assert!(!same_vault(
+            &first.path().join("gone"),
+            &second.path().join("gone")
+        ));
+        assert!(same_vault(
+            &first.path().join("gone"),
+            &first.path().join("gone")
+        ));
     }
 
     #[test]

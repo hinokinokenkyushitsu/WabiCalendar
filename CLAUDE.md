@@ -30,9 +30,15 @@ aborted / invalidated),`integrations::pump` 落盘后发 `sessions://recorded`�
 每一列左半边是 `.ics` 的计划块、右半边是 session,顶部一条汇总(计划总时长、实际
 专注总时长、完成率)。session 是只读的,右半边不接任何手势。
 
-CLI(`calpo`)只做完了**只读的一半**:`calpo today` 与 `calpo log --week [N]`,加上
-vault 写锁。`calpo start` 与它需要的本地 IPC(GUI 在跑时由 GUI 代跑)**尚未实现**。
-`--vault <PATH>` 与 `CALENPOMO_VAULT` 只对单次调用生效,永远不回写 `settings.toml`。
+CLI(`calpo`)三条命令都已实现:`calpo today`、`calpo log --week [N]`、
+`calpo start [LABEL] [--for 25m]`。`--vault <PATH>` 与 `CALENPOMO_VAULT` 只对单次调用
+生效,永远不回写 `settings.toml`。
+
+`calpo start` 走两条路,选哪条不是用户要操心的事:GUI 在跑时,经本地 socket
+(`src-tauri/src/ipc.rs`)请 GUI 代跑,GUI 侧入口是 `commands::handle_ipc`;没有 GUI 时
+CLI 自己跑一个 `Timer::ephemeral`,前台画倒计时,Ctrl-C 记为 aborted。session 的
+`label` 字段至此才第一次有人写。**已知未闭合的缝**:CLI 正在前台跑时用户去开 GUI,
+两边会各跑各的计时;补这个缺口要靠不变量 #4(文件监听),那一条目前仍无代码。
 
 ## 核心架构不变量(不得违反)
 
@@ -58,6 +64,14 @@ vault 写锁。`calpo start` 与它需要的本地 IPC(GUI 在跑时由 GUI 代�
 
 前端禁止用 `setInterval` 累加计数,只能 `invoke('timer_state')` 每秒拉取计算结果;
 composable 放 `src/composables/useTimer.ts`。计时状态需持久化,冷启动能恢复现场。
+CLI 的前台倒计时同样只是 `Timer` 的显示器:每 200ms 调一次 `observe()` 取结果,
+自己不累加任何东西。
+
+`StartOptions` 的三个字段(label / 一次性时长 / 强制 phase)**只属于当前这一段**,
+生命周期与 `started_at` 完全一致,统一由 `clear_segment()` 抹掉。漏抹是静默错误 ——
+下一段会莫名带着上一段的标题、跑上一段的长度。一次性时长绝不许改 `set_durations`,
+否则 `calpo start x --50m` 会把用户 app 里的工作时长永久改掉。这三个字段也进
+`timer.json`:重启后恢复出来的必须是**同一段**,而不是一段长度被换掉的同名番茄钟。
 
 ### 3. 用户数据写入必须经过 `fs_atomic`
 
@@ -97,7 +111,9 @@ composable 放 `src/composables/useTimer.ts`。计时状态需持久化,冷启�
 ```
 
 `outcome` 取值:`completed` | `aborted` | `invalidated`(休眠导致)。
-时间戳一律带时区偏移量的 RFC 3339 格式。
+时间戳一律带时区偏移量的 RFC 3339 格式。`label` 只有 `calpo start "写论文"` 会写
+(app 界面上没有能打字的地方),其余行一律是 `null` —— 是写出来而不是省略,这样手翻文件
+时每一行形状一样。
 
 ## 实现期决策(代码里已定,改动前先读)
 
@@ -149,6 +165,30 @@ focus),改一边必须改另一边。CLI 输出刻意全 ASCII 且把变宽的�
 `–` `·` `—` 都是 East Asian Ambiguous,CJK 终端下会画成双宽而把表格拉歪。
 `config_dir()` 手工复刻 Tauri 的 `app_config_dir()`(即 `dirs::config_dir()/${identifier}`),
 `APP_IDENTIFIER` 必须和 `tauri.conf.json` 的 `identifier` 保持一致。
+一个包两个 bin,所以 `Cargo.toml` 里有 `default-run = "calenpomo"` —— `npm run tauri dev`
+跑的正是裸 `cargo run`,没有这一行会直接报「could not determine which binary to run」。
+
+**本地 IPC** — `src-tauri/src/ipc.rs`,unix 是 `config_dir/cli.sock`,Windows 是命名管道。
+用 `interprocess` crate(std 没有命名管道);它只是 socket,不开端口、不解析主机名,
+和「永不联网」不冲突。**写锁解决不了这一半**:GUI 在跑时计时器在它内存里、每 10 秒重写
+`timer.json`,第二个进程自己起的倒计时会被直接覆盖掉,所以唯一的办法是请 GUI 代跑。
+
+- 一次连接一条请求一条回复,各一行 JSON,然后关闭。两端同属一个 crate,所以字段用
+  snake_case,不必迁就前端的 camelCase。
+- **连不上和被拒绝是两回事**:`send()` 只把 `NotFound`/`ConnectionRefused` 翻成
+  `Ok(None)`(「没开 app」,可以自己跑),其余都是错误。GUI 那边即使读不懂请求也必须回一句
+  `Refused` —— 沉默会被新版 CLI 读成「没开 app」,于是并排跑起第二个计时器。
+- 崩溃残留的 socket 文件靠「先 bind,`AddrInUse` 就试着 connect 一下」区分:有人应答说明
+  真有第二个 app 在跑,这一个就不抢;没人应答才是残骸,覆盖掉。
+- Windows 命名管道是全机器一个命名空间,所以名字里拼了 config_dir 的哈希 ——
+  否则两个账号同时登录会抢同一个管道。
+- socket 的保护就是 config 目录自身的权限(`interprocess` 在 macOS 上设不了 socket mode)。
+- GUI 侧 `serve_cli` 失败只打一行 stderr,不进 `IntegrationStatus`:那个面板讲的是
+  「这台机器允许 app 做什么」,不是「另一个程序能不能找到它」。
+
+`Ctrl-C` 在 CLI 自跑时用 `ctrlc` crate 只设一个 AtomicBool,记录动作发生在循环外、
+和别处一样握着 vault 写锁。**倒计时期间不持锁** —— 另一个终端里的 `calpo today`
+不该为了一个 25 分钟的番茄钟等在那里。
 
 ## 代码约定
 

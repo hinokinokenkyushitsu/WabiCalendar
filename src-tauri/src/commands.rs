@@ -11,10 +11,11 @@ use tauri::{AppHandle, Manager, State};
 use crate::calendar::{CalEvent, Calendars, EventDraft};
 use crate::error::{AppError, Result};
 use crate::integrations::{self, IntegrationStatus};
+use crate::ipc;
 use crate::sessions::{SessionView, Sessions};
 use crate::settings::Settings;
-use crate::timer::{self, Ended, RealClock, Timer, TimerState, Transition};
-use crate::vault::Vault;
+use crate::timer::{self, Ended, Phase, RealClock, StartOptions, Timer, TimerState, Transition};
+use crate::vault::{same_vault, Vault};
 
 /// How many finished segments may pile up waiting for a vault to write them to.
 ///
@@ -151,6 +152,19 @@ impl AppState {
         written
     }
 
+    /// Where this app would put a session right now.
+    ///
+    /// The open vault when there is one, and otherwise the path it is about to
+    /// open: nothing opens a vault until the frontend asks for its status, so
+    /// for the first moments of a launch the settings file is the only one that
+    /// knows. Used to check that `calpo` means the same vault this app does.
+    fn vault_destination(&self) -> Option<PathBuf> {
+        if let Some(vault) = self.vault().as_ref() {
+            return Some(vault.root().to_path_buf());
+        }
+        Settings::load(&self.config_dir).ok()?.vault_path
+    }
+
     /// Run `job` against the open vault, or fail if there is not one.
     ///
     /// Two locks, for two different neighbours. The mutex is held for the whole
@@ -274,6 +288,73 @@ pub fn timer_toggle(app: AppHandle) -> Result<TimerState> {
 pub fn timer_reset(app: AppHandle) -> Result<TimerState> {
     app.state::<AppState>().timer().reset();
     integrations::pump(&app)
+}
+
+/// `timer_start`, reached over the local socket instead of from the window.
+///
+/// This is the whole reason [`crate::ipc`] exists: while the app is up it owns
+/// the timer, so `calpo start` cannot run one of its own without the two writing
+/// over each other. Asking the app to press its own button is the only version
+/// of this that leaves one countdown, one `timer.json` and one session record.
+///
+/// Infallible on purpose — it is an *answer*, not a command whose failure the
+/// caller can retry. Anything that goes wrong comes back as
+/// [`ipc::Response::Refused`] with a sentence the user can read.
+pub fn handle_ipc(app: &AppHandle, request: ipc::Request) -> ipc::Response {
+    let ipc::Request::Start {
+        label,
+        planned_sec,
+        vault,
+    } = request;
+
+    let state = app.state::<AppState>();
+
+    // A `calpo --vault /elsewhere start` that quietly landed in whichever vault
+    // this window happens to have open would be the one failure nobody could
+    // debug from the outside, so the mismatch is reported rather than resolved.
+    if let Some(theirs) = vault.as_deref() {
+        match state.vault_destination() {
+            Some(ours) if same_vault(&ours, theirs) => {}
+            Some(ours) => {
+                return ipc::Response::Refused {
+                    reason: format!(
+                        "CalenPomo has {} open, but calpo was pointed at {}",
+                        ours.display(),
+                        theirs.display()
+                    ),
+                }
+            }
+            None => {
+                return ipc::Response::Refused {
+                    reason: "CalenPomo has no vault open".to_string(),
+                }
+            }
+        }
+    }
+
+    // A zero-length segment would finish the instant it began and spin the
+    // notification. `timer_set_durations` clamps for the same reason.
+    let planned = planned_sec.map(|secs| Duration::from_secs(secs.max(1)));
+    let planned_sec = {
+        let mut timer = state.timer();
+        timer.start_with(StartOptions {
+            label: label.clone(),
+            planned,
+            // `calpo start` names something to work on, so it means work even
+            // if this window is halfway through a break.
+            phase: Some(Phase::Work),
+        });
+        timer.state().planned_sec
+    };
+
+    // The timer lock is released first: `pump` reaches the tray, which is
+    // serviced on the main thread, and this runs on the socket's own.
+    //
+    // Its failure is not the caller's business -- the segment is running either
+    // way, and what `pump` can fail at is persisting and emitting.
+    let _ = integrations::pump(app);
+
+    ipc::Response::Started { planned_sec, label }
 }
 
 #[tauri::command]

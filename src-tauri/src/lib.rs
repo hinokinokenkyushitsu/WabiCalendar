@@ -2,6 +2,7 @@ pub mod calendar;
 pub mod cli;
 pub mod error;
 pub mod fs_atomic;
+pub mod ipc;
 pub mod sessions;
 pub mod settings;
 pub mod timer;
@@ -34,6 +35,36 @@ use crate::integrations::tray;
 #[cfg(feature = "gui")]
 const TICK: Duration = Duration::from_secs(1);
 
+/// Listen for `calpo start`, or carry on without it.
+///
+/// Optional in exactly the way the four OS integrations are, and for the same
+/// reason: an app that refused to open because a socket file was in a strange
+/// state would be worse than an app without the shortcut. `calpo` finding nobody
+/// home runs its own timer instead, so the cost of this failing is a pomodoro
+/// the app's window does not show, not a lost one.
+///
+/// Unlike those four this reports on stderr rather than into `IntegrationStatus`
+/// — the settings panel is about what the *user's machine* will let the app do,
+/// and this is about whether a second program is talking to it.
+#[cfg(feature = "gui")]
+fn serve_cli(app: &tauri::AppHandle, config_dir: &std::path::Path) {
+    let server = match ipc::listen(config_dir) {
+        Ok(server) => server,
+        Err(e) => {
+            eprintln!("calenpomo: `calpo start` cannot reach this window: {e}");
+            return;
+        }
+    };
+
+    let app = app.clone();
+    if let Err(e) = std::thread::Builder::new()
+        .name("calenpomo-ipc".to_string())
+        .spawn(move || server.serve(|request| commands::handle_ipc(&app, request)))
+    {
+        eprintln!("calenpomo: `calpo start` cannot reach this window: {e}");
+    }
+}
+
 #[cfg(feature = "gui")]
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -41,10 +72,11 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let config_dir = app.path().app_config_dir()?;
-            app.manage(AppState::new(config_dir));
+            app.manage(AppState::new(config_dir.clone()));
 
             let handle = app.handle().clone();
             integrations::install(&handle);
+            serve_cli(&handle, &config_dir);
 
             // A plain thread rather than an async task: everything here is
             // synchronous, and a `std::sync::MutexGuard` is not `Send`.

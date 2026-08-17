@@ -1,15 +1,24 @@
 //! The `calpo` command line: the same vault as the app, from a terminal.
 //!
-//! Everything here is a *reader* of files the app also writes, so it takes the
-//! vault's write lock exactly as the app does. Reads are locked too, so that a
-//! report can never be assembled from the middle of a cross-month move, where
+//! The two reports here are *readers* of files the app also writes, so they take
+//! the vault's write lock exactly as the app does. Reads are locked too, so that
+//! a report can never be assembled from the middle of a cross-month move, where
 //! an event is briefly present in two shards at once.
+//!
+//! `start` is the exception and holds no lock while it runs — a 25 minute
+//! pomodoro is not a write, and a `calpo today` in another terminal must not
+//! have to wait one out. It takes the lock at the end, for the one append. See
+//! [`start`] for the other half of that story, which is what happens when the
+//! app is already running.
 
 mod report;
+mod start;
 
+use std::ffi::OsString;
 use std::io::{self, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::time::Duration;
 
 use chrono::{
     DateTime, Datelike, Duration as Delta, Local, LocalResult, NaiveDate, NaiveTime, TimeZone, Utc,
@@ -20,6 +29,7 @@ use crate::calendar::{CalEvent, Calendars};
 use crate::error::{AppError, Result};
 use crate::sessions::{Session, Sessions};
 use crate::settings::Settings;
+use crate::timer::{Phase, StartOptions};
 use crate::vault::Vault;
 use report::DAYS_PER_WEEK;
 
@@ -40,13 +50,16 @@ pub const VAULT_ENV: &str = "CALENPOMO_VAULT";
     name = "calpo",
     version,
     about = "The CalenPomo vault from a terminal.",
-    long_about = "Reads the same vault the CalenPomo app uses: iCalendar files under \
+    long_about = "Works on the same vault the CalenPomo app does: iCalendar files under \
                   calendar/ and pomodoro records under sessions/.\n\n\
                   The vault is the one the app remembers, unless CALENPOMO_VAULT or \
-                  --vault says otherwise."
+                  --vault says otherwise.\n\n\
+                  While the app is open, `calpo start` asks it to run the pomodoro so \
+                  that only one countdown exists; with the app closed, calpo runs it \
+                  here."
 )]
 pub struct Cli {
-    /// Read this vault instead of the remembered one, for this command only.
+    /// Use this vault instead of the remembered one, for this command only.
     ///
     /// Never written back to `settings.toml`: looking at another vault must not
     /// move the app's.
@@ -59,10 +72,45 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Start a pomodoro now.
+    Start(StartArgs),
     /// Today's plan and pomodoros, in full.
     Today,
     /// A week of totals, one row per day.
     Log(LogArgs),
+}
+
+#[derive(Debug, Args)]
+struct StartArgs {
+    /// What you are working on, written into the session record.
+    #[arg(value_name = "LABEL")]
+    label: Option<String>,
+
+    /// How long this one runs: 25m, 90s, 2h, or a bare number of minutes.
+    ///
+    /// This pomodoro only. The app's own work length is left exactly as it
+    /// was: one long session is not a change of mind about every session after
+    /// it. `--50m` is accepted as shorthand for the same thing.
+    #[arg(
+        long = "for",
+        short = 'd',
+        value_name = "DURATION",
+        value_parser = start::parse_duration
+    )]
+    planned: Option<Duration>,
+}
+
+impl From<StartArgs> for StartOptions {
+    fn from(args: StartArgs) -> Self {
+        Self {
+            label: args.label,
+            planned: args.planned,
+            // Named work, not "whatever comes next": `calpo start "写论文"` says
+            // what the user is about to do, so it has to mean work even when the
+            // app is halfway through a break.
+            phase: Some(Phase::Work),
+        }
+    }
 }
 
 #[derive(Debug, Args)]
@@ -203,16 +251,48 @@ fn log(vault: &Vault, weeks_back: u32) -> Result<String> {
     Ok(report::week(&contents.events, &contents.sessions, &days))
 }
 
+/// clap has no way to spell a flag whose *name* is its value, and `--25m` is
+/// the spelling this was asked for in.
+///
+/// So the rewrite happens before clap ever sees the arguments: any `--<digits>…`
+/// becomes `--for=<digits>…`, and everything else is passed through untouched.
+/// Whatever follows a bare `--` is the user saying "stop reading these as
+/// flags", which is exactly what this would otherwise do to a label.
+fn expand_bare_duration(args: impl IntoIterator<Item = OsString>) -> Vec<OsString> {
+    let mut out = Vec::new();
+    let mut literal = false;
+
+    for arg in args {
+        let rewritten = arg.to_str().filter(|_| !literal).and_then(|text| {
+            let rest = text.strip_prefix("--")?;
+            rest.starts_with(|c: char| c.is_ascii_digit())
+                .then(|| OsString::from(format!("--for={rest}")))
+        });
+
+        literal = literal || arg == "--";
+        out.push(rewritten.unwrap_or(arg));
+    }
+    out
+}
+
 fn run(cli: Cli) -> Result<String> {
     let vault = open_vault(cli.vault)?;
 
-    // Held across the read and released before anything is written out: a
-    // terminal that has stopped consuming stdout must not be able to hold the
-    // app's ticker out of the vault.
-    let _lock = vault.lock()?;
     match cli.command {
-        Command::Today => today(&vault),
-        Command::Log(args) => log(&vault, args.week),
+        // The lock is held across the read and released before anything is
+        // written out: a terminal that has stopped consuming stdout must not be
+        // able to hold the app's ticker out of the vault.
+        Command::Today => {
+            let _lock = vault.lock()?;
+            today(&vault)
+        }
+        Command::Log(args) => {
+            let _lock = vault.lock()?;
+            log(&vault, args.week)
+        }
+        // Takes the lock itself, for the append at the end and not for the
+        // twenty-five minutes before it.
+        Command::Start(args) => start::start(&vault, &config_dir()?, args.into()),
     }
 }
 
@@ -238,7 +318,8 @@ fn emit(text: &str) -> ExitCode {
 
 /// The `calpo` entry point.
 pub fn main() -> ExitCode {
-    match run(Cli::parse()) {
+    let args = expand_bare_duration(std::env::args_os());
+    match run(Cli::parse_from(args)) {
         Ok(text) => emit(&text),
         Err(e) => {
             eprintln!("calpo: {e}");
@@ -265,6 +346,72 @@ mod tests {
         // that does not parse, and similar are all caught here rather than by
         // the first user to type the command.
         Cli::command().debug_assert();
+    }
+
+    fn expanded(args: &[&str]) -> Vec<String> {
+        expand_bare_duration(args.iter().map(OsString::from))
+            .into_iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    #[test]
+    fn a_bare_duration_flag_becomes_one_clap_can_read() {
+        assert_eq!(
+            expanded(&["calpo", "start", "写论文", "--25m"]),
+            vec!["calpo", "start", "写论文", "--for=25m"]
+        );
+        assert_eq!(expanded(&["calpo", "start", "--90s"]), {
+            vec!["calpo", "start", "--for=90s"]
+        });
+    }
+
+    /// Only flags that begin with a digit. Everything else clap owns, and
+    /// quietly rewriting a real flag would be far worse than not helping.
+    #[test]
+    fn every_other_argument_is_left_exactly_as_it_was() {
+        let untouched = [
+            "calpo", "log", "--week", "2", "--vault", "/tmp/v", "-d", "5m",
+        ];
+        assert_eq!(expanded(&untouched), untouched.to_vec());
+
+        // A label that looks like a flag is still a label after `--`.
+        assert_eq!(
+            expanded(&["calpo", "start", "--", "--25m"]),
+            vec!["calpo", "start", "--", "--25m"]
+        );
+    }
+
+    /// The full spelling has to keep working; the rewrite is a convenience on
+    /// top of it, not the only way in.
+    #[test]
+    fn the_shorthand_and_the_flag_parse_to_the_same_thing() {
+        let long = Cli::parse_from(expanded(&["calpo", "start", "x", "--for", "25m"]));
+        let short = Cli::parse_from(expanded(&["calpo", "start", "x", "--25m"]));
+
+        let planned = |cli: Cli| match cli.command {
+            Command::Start(args) => StartOptions::from(args).planned,
+            _ => unreachable!("parsed as start"),
+        };
+        assert_eq!(planned(long), Some(Duration::from_secs(1500)));
+        assert_eq!(planned(short), Some(Duration::from_secs(1500)));
+    }
+
+    /// A pomodoro the user did not put a length on runs for whatever the app is
+    /// set to, which only the app knows.
+    #[test]
+    fn a_start_with_no_length_asks_for_no_particular_length() {
+        let cli = Cli::parse_from(["calpo", "start"]);
+
+        match cli.command {
+            Command::Start(args) => {
+                let options = StartOptions::from(args);
+                assert_eq!(options.planned, None);
+                assert_eq!(options.label, None);
+                assert_eq!(options.phase, Some(Phase::Work));
+            }
+            _ => unreachable!("parsed as start"),
+        }
     }
 
     #[test]
