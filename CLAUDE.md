@@ -13,7 +13,8 @@
 ## 硬约束
 
 - SQLite 仅作为**可重建的索引**,不是真相来源(目前尚未引入依赖)。
-- 不要引入后端服务、账号系统、云同步。这个应用永远不联网。
+- 不要引入后端服务、账号系统、云同步。**数据永远不出这台机器**;唯一允许的出站请求是
+  用户自己点托盘里「Check for Updates…」触发的那一次,它不带任何本机信息(见「自动更新」)。
 
 ## 当前进度
 
@@ -42,7 +43,11 @@ CLI 自己跑一个 `Timer::ephemeral`,前台画倒计时,Ctrl-C 记为 aborted�
 
 CI 与发布已接上:`.github/workflows/ci.yml` 在三个 OS 上跑两套 feature 的
 clippy/test,`release.yml` 由 `v*` tag 触发,产出 dmg / AppImage / NSIS 加一个单独编的
-`calpo`,挂成**草稿** release。`install.sh` 与自动更新(第 3、4 项)都还没有。
+`calpo`,挂成**草稿** release,并拼出 `latest.json`。托盘里的「Check for Updates…」
+已经接上 `tauri-plugin-updater`。`install.sh`(第 3 项)与 README(第 5 项)还没有。
+
+**自动更新尚未端到端验证过**:那需要两个已发布的 release(装着旧的去收新的),
+而现在一个 tag 都还没打。已验证的只到「产物签名与 `latest.json` 正确生成」。
 
 ## 核心架构不变量(不得违反)
 
@@ -194,6 +199,29 @@ focus),改一边必须改另一边。CLI 输出刻意全 ASCII 且把变宽的�
 和别处一样握着 vault 写锁。**倒计时期间不持锁** —— 另一个终端里的 `calpo today`
 不该为了一个 25 分钟的番茄钟等在那里。
 
+**自动更新** — `tauri-plugin-updater`,代码在 `integrations/updates.rs`。入口只有托盘菜单
+那一项:没有启动时检查、没有定时器,也没有能把自动检查打开的开关 —— 「默认关闭」在这里
+的意思是那段代码根本不存在。检查跑在 worker 上(`tauri::async_runtime::spawn`),所以
+dialog 的 `blocking_show` 是合法的:它只是不许在主线程调。下载进度写回那个菜单项,每变
+一个百分点才写一次(每次 setter 都是一趟主线程往返)。不进 `IntegrationStatus` —— 那个
+面板讲的是「这台机器允许 app 做什么」,而这件事问的是服务器。
+
+公钥在 `tauri.conf.json` 的 `plugins.updater.pubkey`,私钥在仓库 secret
+`TAURI_SIGNING_PRIVATE_KEY`,本机副本在 `~/.tauri/calenpomo.key`(无口令)。**私钥丢了
+就再也发不出能被已安装版本接受的更新**。代价是本地 `npm run tauri build` 不导出私钥会直接
+失败(`A public key has been found, but no private key`),临时打包加 `--no-sign`。
+
+macOS 的 `--bundles` 必须含 `app`:bundler 只在「构建了 updater 支持的目标」时才产出更新
+产物,那个名单是 app / appimage / msi / nsis,**`dmg` 不在其中**。
+
+`latest.json` **不交给 tauri-action 生成**,两个理由:它是「读现有的 → 加自己这个平台 →
+写回去」,三个并行 job 里最后完成的那个会把另外两个平台抹掉;而且草稿 release 的 asset
+URL 不是发布之后的那个。所以 `release.yml` 里由 `latest-json` 一个 job 在三个构建之后自己
+拼,URL 按 tag 拼死,凑不齐四个键就让这一档失败(少一个平台却照发,那个平台的用户会被
+告知「没有更新」而不是「出事了」)。**是四个键不是三个**:插件只查 `{os}-{arch}` 与
+`{os}-{arch}-{installer}`,**没有 `darwin-universal` 这个回退**,所以那一个通用包要同时
+挂在 `darwin-aarch64` 和 `darwin-x86_64` 下。
+
 **发布** — 两个 workflow。`ci.yml` 的矩阵是 ubuntu-22.04 / macos-latest /
 windows-latest,**Linux 用 22.04 而不是 latest**:AppImage 里带着链接时的 glibc,在
 24.04 上打的包到 22.04 和 Debian 12 就起不来,而 CI 只有和发布同一套环境才作数。
@@ -232,6 +260,7 @@ cargo test --manifest-path src-tauri/Cargo.toml                              # R
 cargo fmt --manifest-path src-tauri/Cargo.toml -- --check                    # 检查格式
 cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 npm run tauri dev        # 开发环境;beforeDevCommand 会自己起 vite,不要另开
+npm run tauri build -- --no-sign   # 本地打包;不加这个会因为找不到 updater 私钥而失败
 npm run typecheck        # 前端没有 ESLint/Prettier,lint 就是这个
 npm test                 # vitest,只测 src/lib/ 下的纯函数
 ```
@@ -254,7 +283,7 @@ cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --no-default-fea
 
 不要主动实现以下任何一项,即使看起来顺手:
 
-- 账号、登录、云同步、任何网络请求
+- 账号、登录、云同步、任何**自动发生的**网络请求(用户手点的更新检查是唯一例外)
 - 日视图、月视图、议程视图 —— **只做周视图**
 - 提醒/闹钟系统(番茄钟结束通知除外)
 - 标签系统、看板、笔记、任务依赖

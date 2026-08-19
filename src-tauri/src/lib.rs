@@ -70,6 +70,11 @@ fn serve_cli(app: &tauri::AppHandle, config_dir: &std::path::Path) {
 pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        // Registering it opens no connection and starts no timer: the plugin
+        // does nothing at all until `integrations::updates::check` asks it to.
+        // Here rather than in `integrations::install` because, unlike the four
+        // there, there is no OS permission it could be refused.
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             let config_dir = app.path().app_config_dir()?;
             app.manage(AppState::new(config_dir.clone()));

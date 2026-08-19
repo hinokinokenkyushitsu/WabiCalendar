@@ -23,6 +23,7 @@
   },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "targets": "all",
     "icon": [
       "icons/32x32.png",
@@ -31,5 +32,13 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDFGNzFCRjNCNEYzMDJEQ0UKUldUT0xUQlBPNzl4SDJMTDhUMXVhMmhWbjhYRVI2NnlHcEt6dVVYSFRuNC8vU3JIUHQ0UkRRTE4K",
+      "endpoints": [
+        "https://github.com/hinokinokenkyushitsu/CalenPomo/releases/latest/download/latest.json"
+      ]
+    }
   }
 }

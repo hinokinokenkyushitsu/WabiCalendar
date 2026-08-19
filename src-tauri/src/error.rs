@@ -100,6 +100,13 @@ pub enum AppError {
     #[error("{0}")]
     Tauri(#[from] tauri::Error),
 
+    /// The update check or the download it leads to. Boxed for the reason
+    /// `TomlDecode` is: the plugin's own error carries a `reqwest::Error`
+    /// inside it, and this enum is returned by value nearly everywhere.
+    #[cfg(feature = "gui")]
+    #[error("{0}")]
+    Update(Box<tauri_plugin_updater::Error>),
+
     #[error("{0:?} is not a key combination we can register")]
     InvalidShortcut(String),
 
@@ -110,6 +117,15 @@ pub enum AppError {
         feature: &'static str,
         reason: String,
     },
+}
+
+/// Written out rather than derived with `#[from]` so that `?` still works on
+/// the plugin's own error type despite the box.
+#[cfg(feature = "gui")]
+impl From<tauri_plugin_updater::Error> for AppError {
+    fn from(source: tauri_plugin_updater::Error) -> Self {
+        Self::Update(Box::new(source))
+    }
 }
 
 /// Tauri commands hand their error back to the frontend as a string.
