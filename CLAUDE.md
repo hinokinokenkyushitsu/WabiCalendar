@@ -40,6 +40,10 @@ CLI 自己跑一个 `Timer::ephemeral`,前台画倒计时,Ctrl-C 记为 aborted�
 `label` 字段至此才第一次有人写。**已知未闭合的缝**:CLI 正在前台跑时用户去开 GUI,
 两边会各跑各的计时;补这个缺口要靠不变量 #4(文件监听),那一条目前仍无代码。
 
+CI 与发布已接上:`.github/workflows/ci.yml` 在三个 OS 上跑两套 feature 的
+clippy/test,`release.yml` 由 `v*` tag 触发,产出 dmg / AppImage / NSIS 加一个单独编的
+`calpo`,挂成**草稿** release。`install.sh` 与自动更新(第 3、4 项)都还没有。
+
 ## 核心架构不变量(不得违反)
 
 ### 1. 文件是唯一真相,`.index/` 是可弃缓存
@@ -190,6 +194,26 @@ focus),改一边必须改另一边。CLI 输出刻意全 ASCII 且把变宽的�
 和别处一样握着 vault 写锁。**倒计时期间不持锁** —— 另一个终端里的 `calpo today`
 不该为了一个 25 分钟的番茄钟等在那里。
 
+**发布** — 两个 workflow。`ci.yml` 的矩阵是 ubuntu-22.04 / macos-latest /
+windows-latest,**Linux 用 22.04 而不是 latest**:AppImage 里带着链接时的 glibc,在
+24.04 上打的包到 22.04 和 Debian 12 就起不来,而 CI 只有和发布同一套环境才作数。
+`cargo fmt` 只在 Linux 跑一次(格式不会因平台而异),CLI 那一半排在 app 前面 ——
+它不需要系统库,而且它覆盖的是两边共享的代码,先看到它坏更有用。
+
+`release.yml` 里 `prepare` 一个 job 先建好草稿 release、把 `releaseId` 发给三个并行的
+构建 job:让 tauri-action 各自去 create 会撞出重复 release。草稿是因为 macOS 没签名,
+发布前那段 Gatekeeper 的话得由人过一眼。**bundler 只打包 app**,`calpo` 是同一个 crate
+里的第二个 bin,要自己 `--no-default-features` 编了再 `gh release upload` 挂上去;macOS
+上编两个 target 再 `lipo` 成一个通用二进制。`--bundles` 的取值按平台过滤,`tauri.conf.json`
+的 `"all"` 保持不动,收窄只发生在 workflow 里,这样本地 `npm run tauri build` 行为不变。
+macOS 只传 `dmg`:`.app` 顺路就建好了,而 tauri-action 的 `artifactPaths` **无条件包含
+`.app` 目录**,它会自己打成 `.tar.gz` 再上传 —— 那正是 `install.sh` 要的形状。每个产物
+配一个 `.sha256`(`sha256sum` 在 macOS 上没有,`shasum` 在 Windows 上没有,取其一)。
+
+版本号有四份(tag / `Cargo.toml` / `package.json` / `tauri.conf.json`),
+`.github/scripts/check-versions.sh` 是发布的第一道闸:对不上就不构建。这四份不一致时
+哪里都不报错,直到有人说 v0.2.0 装出来是 0.1.0。
+
 ## 代码约定
 
 - Rust:`cargo fmt` 与 `cargo clippy` 必须干净(命令见下)。
@@ -220,6 +244,12 @@ cargo test   --manifest-path src-tauri/Cargo.toml --no-default-features
 cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --no-default-features -- -D warnings
 ```
 
+打 tag 之前先自己跑一遍版本闸(CI 里跑的是同一个脚本):
+
+```bash
+.github/scripts/check-versions.sh v0.2.0
+```
+
 ## 明确不做的事(v1)
 
 不要主动实现以下任何一项,即使看起来顺手:
@@ -239,7 +269,6 @@ cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --no-default-fea
 - `opening_a_fresh_directory_builds_the_whole_skeleton` 断言 `report.created` 的精确顺序,是否算契约。
 - 前端不加 ESLint/Prettier 是刻意还是未做(vitest 已经加了,lint 仍然没有)。
 - `.index/cache.db` 这个文件名代码里还不存在,是否还作数。
-- `bundle.targets: "all"` 对自用应用是否必要。
 - 全天(DATE 值)事件目前渲染在日期头下面一条只读窄条里,这是实现时自己定的,要不要保留。
 - 周视图固定周一起始,没有做成可配置。
 

@@ -1,0 +1,92 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+# A newer push to the same branch makes the run already in flight pointless.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust:
+    name: rust / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # One platform failing is the interesting case; letting the others finish
+      # is what tells us whether it is that platform or the change.
+      fail-fast: false
+      matrix:
+        # 22.04 rather than latest, to match the machine release.yml builds the
+        # AppImage on. CI is only worth something if it is the same environment.
+        os: [ubuntu-22.04, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      # Only the `gui` half needs these -- `calpo` is built without the feature
+      # precisely so it does not -- but this job builds both halves.
+      - name: Install Linux system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libxdo-dev \
+            libssl-dev \
+            file
+
+      # Formatting cannot come out differently on another platform, so once.
+      - name: cargo fmt
+        if: runner.os == 'Linux'
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+
+      # The CLI half goes first: it is the cheap one, it needs no system
+      # libraries, and everything it covers is code the app shares -- so when it
+      # is the half that breaks, that is the more useful thing to be told first.
+      - name: clippy (calpo)
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --no-default-features -- -D warnings
+
+      - name: test (calpo)
+        run: cargo test --manifest-path src-tauri/Cargo.toml --no-default-features
+
+      - name: clippy (app)
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+
+      - name: test (app)
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+
+  frontend:
+    name: frontend
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      # There is no ESLint or Prettier here; typecheck is the lint.
+      - run: npm run typecheck
+
+      - run: npm test
