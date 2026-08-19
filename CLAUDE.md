@@ -222,6 +222,26 @@ URL 不是发布之后的那个。所以 `release.yml` 里由 `latest-json` 一�
 `{os}-{arch}-{installer}`,**没有 `darwin-universal` 这个回退**,所以那一个通用包要同时
 挂在 `darwin-aarch64` 和 `darwin-x86_64` 下。
 
+**安装脚本** — `install.sh` 是 POSIX sh(所以 `| sh` 是诚实的,不写 bashism),`install.ps1`
+是它的 Windows 对应物。两个都把全部逻辑放进函数、**最后一行才调用**:下载被截断时,得到的
+是一堆定义好却没跑的函数,而不是执行了一半的安装。
+
+产物按**名字后缀匹配**,不是拼出来的:版本号一变,脚本不用跟着改。取资产列表时就把
+`.sha256` 和 `.sig` 滤掉 —— `calpo-linux-x86_64.sha256` 匹配得上
+`calpo-linux-*` 的每一个模式,不滤会挑到校验和本身。每个产物都对 `.sha256` 校验,**没有
+校验和是拒绝安装而不是跳过**。
+
+macOS 装 `.app.tar.gz` 而不是 dmg(不用挂载)。`/Applications` 对管理员组是可写的,所以
+通常不需要 sudo,不可写才退到 `~/Applications`。curl **不会**打 quarantine 标记(只有浏览器
+用的那套 API 会),所以 curl 装进去的未签名 app 反而不会被 Gatekeeper 拦下 —— 脚本里那行
+`xattr -dr` 是给「文件从别的路子来的」兜底。
+
+Linux 的图标从 AppImage 自己里抽,但要用**已经装好的那一份**:curl 写下来的文件没有执行位,
+不能执行的 AppImage 也就不能解包(这条是桩测抓出来的,不是想出来的)。抽不到就不写
+`Icon=` 那一行,不是失败。
+
+`calpo` 两个平台统一装 `~/.local/bin`,不要 sudo;不在 PATH 上就把该加的那行打印出来。
+
 **发布** — 两个 workflow。`ci.yml` 的矩阵是 ubuntu-22.04 / macos-latest /
 windows-latest,**Linux 用 22.04 而不是 latest**:AppImage 里带着链接时的 glibc,在
 24.04 上打的包到 22.04 和 Debian 12 就起不来,而 CI 只有和发布同一套环境才作数。
@@ -237,6 +257,13 @@ windows-latest,**Linux 用 22.04 而不是 latest**:AppImage 里带着链接时�
 macOS 只传 `dmg`:`.app` 顺路就建好了,而 tauri-action 的 `artifactPaths` **无条件包含
 `.app` 目录**,它会自己打成 `.tar.gz` 再上传 —— 那正是 `install.sh` 要的形状。每个产物
 配一个 `.sha256`(`sha256sum` 在 macOS 上没有,`shasum` 在 Windows 上没有,取其一)。
+
+校验和由最后那个 `finish` job 对**已经上传的资产**算,不是对本地构建产物算:tauri-action
+会给它上传的一部分东西改名(macOS 那个 tarball 会带上架构),而按本地文件名存下来的校验和
+对不上任何一个能下载到的名字。`install.sh` 找的正是 `<资产名>.sha256`。这个 job 不 checkout,
+所以要给它 `GH_REPO` —— `gh release` 会去问 git 当前仓库是哪个,而 `gh api` 不会(仓库名在
+URL 里),于是第一次跑时它一路跑到最后一条命令才说「not a git repository」,顺带把 release
+notes 静默取成了空串。
 
 版本号有四份(tag / `Cargo.toml` / `package.json` / `tauri.conf.json`),
 `.github/scripts/check-versions.sh` 是发布的第一道闸:对不上就不构建。这四份不一致时
