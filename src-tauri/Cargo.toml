@@ -50,6 +50,7 @@ gui = [
     "dep:tauri-plugin-notification",
     "dep:tauri-plugin-global-shortcut",
     "dep:tauri-plugin-autostart",
+    "dep:tauri-plugin-updater",
 ]
 
 [build-dependencies]
@@ -68,6 +69,9 @@ tauri-plugin-dialog = { version = "2", optional = true }
 tauri-plugin-notification = { version = "2", optional = true }
 tauri-plugin-global-shortcut = { version = "2", optional = true }
 tauri-plugin-autostart = { version = "2", optional = true }
+# The only network access in the project, and only when the user asks for it
+# from the tray. See `integrations::updates`.
+tauri-plugin-updater = { version = "2", optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "0.8"

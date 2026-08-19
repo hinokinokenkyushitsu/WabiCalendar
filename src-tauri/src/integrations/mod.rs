@@ -9,11 +9,16 @@
 //! All four are driven from Rust rather than from the webview. That keeps the
 //! degradation logic in one place and keeps the plugin ACL surface in
 //! `capabilities/default.json` at zero.
+//!
+//! [`updates`] lives here too without being one of them: it is reached from the
+//! tray's menu and it is driven from Rust for the same reasons, but it asks a
+//! server rather than the OS, so no [`FeatureStatus`] describes it.
 
 pub mod autostart;
 pub mod notify;
 pub mod shortcut;
 pub mod tray;
+pub mod updates;
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};

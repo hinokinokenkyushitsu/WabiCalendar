@@ -23,6 +23,7 @@ use tauri::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager, Wry};
 
+use super::updates;
 use crate::commands::AppState;
 use crate::error::{AppError, Result};
 use crate::timer::{Phase, RunState, TimerState};
@@ -32,6 +33,9 @@ pub struct Tray {
     icon: TrayIcon<Wry>,
     remaining: MenuItem<Wry>,
     toggle: MenuItem<Wry>,
+    /// Handed out by [`updates_item`] so the check can report into it. Nothing
+    /// in `render` touches it, so the two never fight over the label.
+    updates: MenuItem<Wry>,
     /// What we last painted, so an unchanged second costs nothing. Every setter
     /// below is a round trip to the main thread; at 1 Hz forever that adds up.
     last: Mutex<Painted>,
@@ -50,6 +54,13 @@ pub fn build(app: &AppHandle) -> Result<Tray> {
     let toggle = MenuItem::with_id(app, "toggle", "Start", true, None::<&str>)?;
     let reset = MenuItem::with_id(app, "reset", "Reset", true, None::<&str>)?;
     let show = MenuItem::with_id(app, "show", "Show window", true, None::<&str>)?;
+    let updates = MenuItem::with_id(
+        app,
+        updates::MENU_ID,
+        updates::MENU_IDLE,
+        true,
+        None::<&str>,
+    )?;
     let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
 
     let menu = Menu::with_items(
@@ -61,6 +72,7 @@ pub fn build(app: &AppHandle) -> Result<Tray> {
             &reset,
             &PredefinedMenuItem::separator(app)?,
             &show,
+            &updates,
             &quit,
         ],
     )?;
@@ -88,6 +100,7 @@ pub fn build(app: &AppHandle) -> Result<Tray> {
         icon,
         remaining,
         toggle,
+        updates,
         last: Mutex::new(Painted::default()),
     })
 }
@@ -104,6 +117,8 @@ fn on_menu(app: &AppHandle, event: MenuEvent) {
             let _ = super::pump(app);
         }
         "show" => show_window(app),
+        // Returns at once; the network half runs on a worker.
+        updates::MENU_ID => updates::check(app),
         // The one path that really exits. It raises `RunEvent::ExitRequested`
         // rather than the window's `CloseRequested`, so the hide-on-close
         // handler never sees it.
@@ -132,6 +147,14 @@ pub fn show_window(app: &AppHandle) {
     let _ = window.show();
     let _ = window.unminimize();
     let _ = window.set_focus();
+}
+
+/// The menu entry that starts an update check, when there is a tray to hold it.
+///
+/// Handed out rather than driven from here because everything that happens to
+/// its label belongs to the check, not to the countdown.
+pub fn updates_item(app: &AppHandle) -> Option<MenuItem<Wry>> {
+    app.try_state::<Tray>().map(|tray| tray.updates.clone())
 }
 
 /// True when the tray is up, which is also the answer to "may closing the window

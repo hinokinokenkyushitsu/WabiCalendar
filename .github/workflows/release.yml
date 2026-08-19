@@ -54,7 +54,7 @@ jobs:
           id=$(find_release)
           if [ -z "$id" ]; then
             cat > notes.md <<'NOTES'
-          Each file below has a matching `.sha256`.
+          The app and `calpo` each have a matching `.sha256` beside them.
 
           The macOS build is not signed or notarised. The first time you open it,
           right-click the app and choose Open, or run
@@ -83,10 +83,12 @@ jobs:
         include:
           - name: macOS (universal)
             os: macos-latest
-            # One download for both kinds of Mac. `dmg` alone is deliberate: the
-            # .app gets built on the way there anyway, and tauri-action tars it
-            # up and uploads that too, which is the form install.sh wants.
-            args: --target universal-apple-darwin --bundles dmg
+            # One download for both kinds of Mac. `app` is named alongside the
+            # dmg because the bundler refuses to make updater artifacts unless
+            # an updater-enabled target (app, appimage, msi, nsis -- not dmg)
+            # was asked for; it is also the form install.sh wants, and
+            # tauri-action uploads it as the .app.tar.gz the updater consumes.
+            args: --target universal-apple-darwin --bundles app,dmg
             rust_targets: aarch64-apple-darwin,x86_64-apple-darwin
             cli: calpo-macos-universal
           - name: Linux (x86_64)
@@ -142,9 +144,19 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Without these the bundler stops at "a public key has been found,
+          # but no private key" -- and an unsigned bundle is one no installed
+          # copy would accept anyway.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           releaseId: ${{ needs.prepare.outputs.release_id }}
           args: ${{ matrix.args }}
+          # The action writes latest.json by reading whatever is on the release,
+          # adding its own platform and writing it back -- three jobs doing that
+          # at once keep whichever finishes last. The `latest-json` job below
+          # assembles it once, from the signatures, after all three have landed.
+          uploadUpdaterJson: false
 
       # The bundler only ever packages the app. `calpo` is a second binary in
       # the same crate, so it is built and attached by hand -- without the `gui`
@@ -193,7 +205,9 @@ jobs:
           cd artifacts
           for file in *; do
             case "$file" in
-              *.sha256) continue ;;
+              # A signature is checked by the updater, not by a person, and a
+              # checksum of one helps nobody.
+              *.sha256 | *.sig) continue ;;
             esac
             # sha256sum is missing on macOS, shasum on Windows. Same output.
             if command -v sha256sum > /dev/null; then
@@ -211,3 +225,77 @@ jobs:
         run: |
           gh release upload "${{ github.ref_name }}" \
             "artifacts/${{ matrix.cli }}" artifacts/*.sha256 --clobber
+
+  # What an installed copy actually reads when the user picks "Check for
+  # Updates…". One job rather than three because assembling it means reading
+  # every platform's signature at once, and because the URLs have to be the ones
+  # the tag will have -- a draft's own asset URLs are not those.
+  latest-json:
+    name: latest.json
+    needs: [prepare, bundle]
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Assemble it from the signatures and attach it
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          RELEASE_ID: ${{ needs.prepare.outputs.release_id }}
+        run: |
+          base="https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG"
+          platforms='{}'
+
+          # Every updater artifact on the release is named by its signature:
+          # drop the .sig and you have the file it signs.
+          while read -r id name; do
+            case "$name" in
+              *.sig) ;;
+              *) continue ;;
+            esac
+            bundle=${name%.sig}
+
+            # The plugin looks up `{os}-{arch}` and nothing else -- there is no
+            # "universal" key it falls back to -- so the one Mac build is listed
+            # under both architectures.
+            case "$bundle" in
+              *.app.tar.gz) keys="darwin-aarch64 darwin-x86_64" ;;
+              *.AppImage)   keys="linux-x86_64" ;;
+              *-setup.exe)  keys="windows-x86_64" ;;
+              *)
+                echo "not an updater artifact, skipping: $bundle" >&2
+                continue
+                ;;
+            esac
+
+            # A draft release's assets are not public yet, so this reads the
+            # signature through the API rather than from the download URL.
+            signature=$(gh api "repos/$GITHUB_REPOSITORY/releases/assets/$id" \
+              -H "Accept: application/octet-stream")
+
+            for key in $keys; do
+              platforms=$(jq --arg key "$key" --arg url "$base/$bundle" --arg signature "$signature" \
+                '.[$key] = {signature: $signature, url: $url}' <<<"$platforms")
+            done
+          done < <(gh api --paginate "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets" \
+            --jq '.[] | "\(.id) \(.name)"')
+
+          # Three platforms, four keys. Anything less means a build produced no
+          # signature, and shipping the file anyway would leave those users
+          # being told there is no update rather than that something is wrong.
+          found=$(jq 'keys | length' <<<"$platforms")
+          if [ "$found" -ne 4 ]; then
+            echo "expected 4 platform keys, found $found:" >&2
+            jq -r 'keys[]' <<<"$platforms" >&2
+            exit 1
+          fi
+
+          jq -n \
+            --arg version "$VERSION" \
+            --arg notes "$(gh release view "$TAG" --json body --jq .body)" \
+            --arg pub_date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --argjson platforms "$platforms" \
+            '{version: $version, notes: $notes, pub_date: $pub_date, platforms: $platforms}' \
+            > latest.json
+
+          jq '.platforms |= map_values(.signature |= "<\(. | length) bytes>")' latest.json
+          gh release upload "$TAG" latest.json --clobber
