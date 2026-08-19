@@ -63,7 +63,10 @@ impl Settings {
             Err(source) => return Err(AppError::Io { path, source }),
         };
 
-        toml::from_str(&text).map_err(|source| AppError::TomlDecode { path, source })
+        toml::from_str(&text).map_err(|source| AppError::TomlDecode {
+            path,
+            source: Box::new(source),
+        })
     }
 
     pub fn save(&self, config_dir: &Path) -> Result<()> {

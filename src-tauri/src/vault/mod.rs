@@ -143,7 +143,10 @@ impl Vault {
     pub fn read_config(&self) -> Result<VaultConfig> {
         let path = self.config_path();
         let text = fs::read_to_string(&path).at(&path)?;
-        toml::from_str(&text).map_err(|source| AppError::TomlDecode { path, source })
+        toml::from_str(&text).map_err(|source| AppError::TomlDecode {
+            path,
+            source: Box::new(source),
+        })
     }
 }
 

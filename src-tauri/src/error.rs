@@ -19,11 +19,16 @@ pub enum AppError {
     #[error("not a directory: {}", .0.display())]
     NotADirectory(PathBuf),
 
+    /// The decoder's own error is boxed because it is 96 bytes by itself --
+    /// four fifths of everything `AppError` is -- and this enum is returned by
+    /// value from nearly every function in the backend. `PathBuf` is eight
+    /// bytes wider on Windows than on unix, which is what put the unboxed
+    /// version over clippy's line there and nowhere else.
     #[error("{} is not valid TOML: {source}", path.display())]
     TomlDecode {
         path: PathBuf,
         #[source]
-        source: toml::de::Error,
+        source: Box<toml::de::Error>,
     },
 
     #[error("could not encode TOML: {0}")]
