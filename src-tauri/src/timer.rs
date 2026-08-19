@@ -202,7 +202,7 @@ pub enum Outcome {
 /// the tray, and pressing reset on a half-run pomodoro has to be recorded
 /// without anything being announced out loud. Keeping the two apart is what
 /// lets [`Outcome::Aborted`] exist without a notification attached to it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Ended {
     pub phase: Phase,
     pub planned_sec: u64,
@@ -212,6 +212,32 @@ pub struct Ended {
     pub started_at: SystemTime,
     pub ended_at: SystemTime,
     pub outcome: Outcome,
+    /// What the user called this one, when they said. Only `calpo start` sets
+    /// it today; the app's own start button has nowhere to type one.
+    pub label: Option<String>,
+}
+
+/// What the user asked for when starting one particular segment.
+///
+/// Both fields belong to *that* segment and to nothing after it: a labelled
+/// 50-minute pomodoro is followed by an ordinary unlabelled break of the length
+/// the app is configured for. That is why the one-off length lives here rather
+/// than going through [`Timer::set_durations`], which would change the app's
+/// setting for good.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct StartOptions {
+    /// Written straight into the session record.
+    pub label: Option<String>,
+    /// This segment's length, in place of the configured one. `None` means the
+    /// configured one.
+    pub planned: Option<Duration>,
+    /// Which phase to begin, in place of the one that was queued.
+    ///
+    /// `None` — the app's own start button — begins whatever comes next, which
+    /// is how the work/break rhythm advances. `calpo start "写论文"` is the
+    /// other case: it names a thing the user is about to work on, so it has to
+    /// mean work even if the app is halfway through a break.
+    pub phase: Option<Phase>,
 }
 
 /// The clock readings at the moment the current run stretch began.
@@ -244,11 +270,24 @@ struct Persisted {
     /// loads; the segment it describes simply goes unrecorded.
     #[serde(default)]
     started_at_unix: Option<u64>,
+    /// The current segment's label, if it was given one.
+    #[serde(default)]
+    label: Option<String>,
+    /// The current segment's one-off length, if it was given one.
+    ///
+    /// Carried across a restart for the same reason `started_at_unix` is: a
+    /// segment that came back as 25 minutes because nobody wrote down that the
+    /// user asked for 50 would be a different segment from the one that was
+    /// running.
+    #[serde(default)]
+    override_planned_sec: Option<u64>,
 }
 
 pub struct Timer<C: Clock> {
     clock: C,
-    path: PathBuf,
+    /// Where the state file lives, or `None` for a timer that keeps its state
+    /// nowhere at all — see [`Timer::ephemeral`].
+    path: Option<PathBuf>,
     phase: Phase,
     run: RunState,
     work: Duration,
@@ -265,6 +304,12 @@ pub struct Timer<C: Clock> {
     /// drawn. Elapsed time is still counted monotonically — this stamp is never
     /// subtracted from anything.
     started_at: Option<SystemTime>,
+    /// The current segment's label. Lives exactly as long as `started_at`.
+    label: Option<String>,
+    /// The current segment's length, when the user asked for one that is not
+    /// the configured one. Lives exactly as long as `started_at`, so the break
+    /// after a one-off 50-minute pomodoro is an ordinary break.
+    override_planned: Option<Duration>,
     /// Segments that have ended and not yet been written to `sessions/`.
     ended: Vec<Ended>,
     /// Monotonic reading of the last successful persist, for heartbeat pacing.
@@ -287,20 +332,7 @@ impl<C: Clock> Timer<C> {
     /// user nothing, and refusing to start over it would be far worse than
     /// starting idle.
     pub fn load(clock: C, path: PathBuf, work: Duration, brk: Duration) -> (Self, Vec<Transition>) {
-        let mut timer = Self {
-            clock,
-            path,
-            phase: Phase::Work,
-            run: RunState::Idle,
-            work,
-            brk,
-            banked: Duration::ZERO,
-            since: None,
-            started_at: None,
-            ended: Vec::new(),
-            last_persist: None,
-            dirty: false,
-        };
+        let mut timer = Self::bare(clock, Some(path), work, brk);
 
         let Some(saved) = timer.read_persisted() else {
             return (timer, Vec::new());
@@ -312,6 +344,10 @@ impl<C: Clock> Timer<C> {
         timer.started_at = saved
             .started_at_unix
             .map(|secs| UNIX_EPOCH + Duration::from_secs(secs));
+        // Before the early return below, because the invalidating path records
+        // the segment and the record has to carry what the user asked for.
+        timer.label = saved.label;
+        timer.override_planned = saved.override_planned_sec.map(Duration::from_secs);
 
         // Only a timer that was running has a gap to account for.
         if saved.run != RunState::Running {
@@ -354,16 +390,54 @@ impl<C: Clock> Timer<C> {
         (timer, transitions)
     }
 
+    /// A timer at rest, having read nothing.
+    fn bare(clock: C, path: Option<PathBuf>, work: Duration, brk: Duration) -> Self {
+        Self {
+            clock,
+            path,
+            phase: Phase::Work,
+            run: RunState::Idle,
+            work,
+            brk,
+            banked: Duration::ZERO,
+            since: None,
+            started_at: None,
+            label: None,
+            override_planned: None,
+            ended: Vec::new(),
+            last_persist: None,
+            dirty: false,
+        }
+    }
+
+    /// A timer that keeps its state nowhere, for `calpo start` with no app
+    /// running.
+    ///
+    /// `timer.json` belongs to the app. Writing to it from a second process
+    /// would have the app's next launch restore a segment this one already
+    /// recorded, and reading it would have the CLI adopt a segment the app is
+    /// halfway through. So the standalone countdown does neither, and pays for
+    /// it by being the one timer that cannot survive its own restart — which is
+    /// the honest trade, since killing the terminal is how you stop it.
+    pub fn ephemeral(clock: C, work: Duration, brk: Duration) -> Self {
+        Self::bare(clock, None, work, brk)
+    }
+
     fn read_persisted(&self) -> Option<Persisted> {
-        let text = std::fs::read_to_string(&self.path).ok()?;
+        let text = std::fs::read_to_string(self.path.as_ref()?).ok()?;
         serde_json::from_str(&text).ok()
     }
 
+    /// How long the segment under way is meant to run.
+    ///
+    /// The one-off length wins while there is one, which is what makes
+    /// `calpo start --50m` a single long pomodoro rather than a change to the
+    /// user's settings.
     fn planned(&self) -> Duration {
-        match self.phase {
+        self.override_planned.unwrap_or(match self.phase {
             Phase::Work => self.work,
             Phase::Break => self.brk,
-        }
+        })
     }
 
     fn mark_running(&mut self) {
@@ -393,7 +467,11 @@ impl<C: Clock> Timer<C> {
     /// file can leave a running timer with no idea when it began, and a record
     /// whose `started_at` we invented would be worse than no record.
     fn close(&mut self, outcome: Outcome, actual: Duration, ended_at: Option<SystemTime>) {
-        let Some(started_at) = self.started_at.take() else {
+        // Read before clearing: both belong to the segment being closed.
+        let planned_sec = self.planned().as_secs();
+        let label = self.label.clone();
+
+        let Some(started_at) = self.clear_segment() else {
             return;
         };
         self.dirty = true;
@@ -401,7 +479,7 @@ impl<C: Clock> Timer<C> {
         let ended_at = ended_at.unwrap_or(started_at + actual);
         self.ended.push(Ended {
             phase: self.phase,
-            planned_sec: self.planned().as_secs(),
+            planned_sec,
             actual_sec: actual.as_secs(),
             started_at,
             // A wall clock dragged backwards mid-segment would otherwise write a
@@ -409,7 +487,20 @@ impl<C: Clock> Timer<C> {
             // height.
             ended_at: ended_at.max(started_at),
             outcome,
+            label,
         });
+    }
+
+    /// Forget everything that belonged to the segment under way, handing back
+    /// its start stamp if it had one.
+    ///
+    /// One place rather than three assignments at every ending, because the
+    /// label and the one-off length going stale is silent: the next segment
+    /// would simply come out labelled and the wrong length.
+    fn clear_segment(&mut self) -> Option<SystemTime> {
+        self.label = None;
+        self.override_planned = None;
+        self.started_at.take()
     }
 
     /// Close the segment under way, if there is one, as abandoned.
@@ -420,7 +511,7 @@ impl<C: Clock> Timer<C> {
     fn abandon(&mut self) {
         let elapsed = self.elapsed().min(self.planned());
         if elapsed.as_secs() == 0 {
-            self.started_at = None;
+            self.clear_segment();
             return;
         }
         let now = self.clock.wall();
@@ -556,9 +647,26 @@ impl<C: Clock> Timer<C> {
     /// Starting over a segment that was still under way abandons it, and an
     /// abandoned segment is still something that happened to the user's day.
     pub fn start(&mut self) {
+        self.start_with(StartOptions::default());
+    }
+
+    /// Start the queued segment with a label, a one-off length, or both.
+    ///
+    /// The plain [`Timer::start`] is this with nothing asked for, which is what
+    /// the app's own button and the space bar do — there is nowhere in the UI to
+    /// type a label.
+    pub fn start_with(&mut self, options: StartOptions) {
+        // Before the phase moves: whatever is being abandoned has to be
+        // recorded as the phase it actually was.
         self.abandon();
+        if let Some(phase) = options.phase {
+            self.phase = phase;
+        }
         self.banked = Duration::ZERO;
         self.started_at = Some(self.clock.wall());
+        // After `abandon`, which clears both as it closes the old segment.
+        self.label = options.label;
+        self.override_planned = options.planned;
         self.mark_running();
     }
 
@@ -600,9 +708,11 @@ impl<C: Clock> Timer<C> {
     /// True when the state file no longer matches what is in memory.
     ///
     /// Covers both halves: a state change that has not been written yet, and a
-    /// running timer whose heartbeat has gone stale.
+    /// running timer whose heartbeat has gone stale. Always false for an
+    /// [ephemeral](Timer::ephemeral) timer, which has no state file to differ
+    /// from.
     pub fn persist_due(&self) -> bool {
-        self.dirty || self.heartbeat_due()
+        self.path.is_some() && (self.dirty || self.heartbeat_due())
     }
 
     /// True when a running timer's heartbeat is stale enough to rewrite.
@@ -619,7 +729,14 @@ impl<C: Clock> Timer<C> {
     /// Write the timer's state where a cold start can find it.
     ///
     /// Goes through `fs_atomic` like every other write in the app (invariant #3).
+    ///
+    /// A no-op for an [ephemeral](Timer::ephemeral) timer. `persist_due` never
+    /// asks for one, so this only catches a caller that persists unconditionally.
     pub fn persist(&mut self) -> Result<()> {
+        let Some(path) = self.path.clone() else {
+            return Ok(());
+        };
+
         let saved = Persisted {
             phase: self.phase,
             run: self.run,
@@ -637,10 +754,12 @@ impl<C: Clock> Timer<C> {
                 .started_at
                 .and_then(|at| at.duration_since(UNIX_EPOCH).ok())
                 .map(|d| d.as_secs()),
+            label: self.label.clone(),
+            override_planned_sec: self.override_planned.map(|d| d.as_secs()),
         };
 
         let json = serde_json::to_vec_pretty(&saved)?;
-        atomic_write(&self.path, &json)?;
+        atomic_write(&path, &json)?;
         self.last_persist = Some(self.clock.monotonic());
         self.dirty = false;
         Ok(())
@@ -1275,6 +1394,229 @@ mod tests {
         assert_eq!(t.state().elapsed_sec, 30);
         t.reset();
         assert!(t.take_ended().is_empty());
+    }
+
+    /// `calpo start x --50m` asks for one long pomodoro, not for a new setting:
+    /// the break after it, and every segment after that, are the configured
+    /// lengths again.
+    #[test]
+    fn a_one_off_length_belongs_to_its_own_segment_and_nothing_after_it() {
+        let dir = TempDir::new().expect("tempdir");
+        let mut t = timer(&dir);
+
+        t.start_with(StartOptions {
+            label: None,
+            planned: Some(Duration::from_secs(90)),
+            phase: None,
+        });
+        assert_eq!(t.state().planned_sec, 90, "the one-off length is in force");
+
+        t.clock.advance(Duration::from_secs(90));
+        let (state, _) = t.observe();
+
+        assert_eq!(state.phase, Phase::Break);
+        assert_eq!(
+            state.planned_sec, 30,
+            "the break took the one-off length with it"
+        );
+        assert_eq!(t.take_ended()[0].planned_sec, 90);
+
+        // And the configured work length is back for the next one.
+        t.clock.advance(BREAK);
+        t.observe();
+        t.take_ended();
+        t.start();
+        assert_eq!(t.state().planned_sec, 60);
+    }
+
+    /// The whole point of a one-off length: it must not reach `set_durations`,
+    /// or `calpo start x --50m` would quietly rewrite the app's settings.
+    #[test]
+    fn a_one_off_length_leaves_the_configured_durations_alone() {
+        let dir = TempDir::new().expect("tempdir");
+        let mut t = timer(&dir);
+
+        t.start_with(StartOptions {
+            label: None,
+            planned: Some(Duration::from_secs(3000)),
+            phase: None,
+        });
+
+        assert_eq!(t.durations(), (WORK, BREAK));
+    }
+
+    #[test]
+    fn a_label_rides_the_segment_into_its_record() {
+        let dir = TempDir::new().expect("tempdir");
+        let mut t = timer(&dir);
+
+        t.start_with(StartOptions {
+            label: Some("写论文".to_string()),
+            planned: None,
+            phase: None,
+        });
+        t.clock.advance(WORK);
+        t.observe();
+
+        let ended = t.take_ended();
+        assert_eq!(ended.len(), 1);
+        assert_eq!(ended[0].label.as_deref(), Some("写论文"));
+
+        // The break that started itself is nobody's labelled pomodoro.
+        t.clock.advance(BREAK);
+        t.observe();
+        let brk = t.take_ended();
+        assert_eq!(brk.len(), 1);
+        assert_eq!(brk[0].label, None);
+    }
+
+    /// Starting over hands the old label to the abandoned record and keeps none
+    /// of it for the new segment.
+    #[test]
+    fn starting_again_does_not_inherit_the_last_label() {
+        let dir = TempDir::new().expect("tempdir");
+        let mut t = timer(&dir);
+
+        t.start_with(StartOptions {
+            label: Some("first".to_string()),
+            planned: Some(Duration::from_secs(300)),
+            phase: None,
+        });
+        t.clock.advance(Duration::from_secs(20));
+        t.start();
+
+        let ended = t.take_ended();
+        assert_eq!(ended.len(), 1);
+        assert_eq!(ended[0].label.as_deref(), Some("first"));
+        assert_eq!(ended[0].planned_sec, 300);
+
+        assert_eq!(t.state().planned_sec, 60, "the one-off length carried over");
+        t.clock.advance(WORK);
+        t.observe();
+        assert_eq!(t.take_ended()[0].label, None, "the label carried over");
+    }
+
+    /// A slip -- start and immediately reset -- records nothing, and must not
+    /// leave the label behind for whatever is started next.
+    #[test]
+    fn a_segment_too_short_to_record_still_gives_up_its_label() {
+        let dir = TempDir::new().expect("tempdir");
+        let mut t = timer(&dir);
+
+        t.start_with(StartOptions {
+            label: Some("slip".to_string()),
+            planned: Some(Duration::from_secs(300)),
+            phase: None,
+        });
+        t.clock.advance(Duration::from_millis(300));
+        t.reset();
+        assert!(t.take_ended().is_empty());
+
+        t.start();
+        assert_eq!(t.state().planned_sec, 60);
+        t.clock.advance(WORK);
+        t.observe();
+        assert_eq!(t.take_ended()[0].label, None);
+    }
+
+    /// A restart must restore the *same* segment. One that came back as 25
+    /// minutes because nobody wrote down that the user asked for 50 would be a
+    /// different pomodoro wearing the same start time.
+    #[test]
+    fn a_labelled_one_off_segment_comes_back_whole_after_a_restart() {
+        let dir = TempDir::new().expect("tempdir");
+        let path = state_path(dir.path());
+
+        let mut first = timer(&dir);
+        first.start_with(StartOptions {
+            label: Some("写论文".to_string()),
+            planned: Some(Duration::from_secs(90)),
+            phase: None,
+        });
+        first.clock.advance(Duration::from_secs(20));
+        first.persist().expect("persist");
+
+        let restarted = FakeClock::new();
+        restarted.advance_split(Duration::ZERO, Duration::from_secs(20 + 5));
+        let (mut t, transitions) = Timer::load(restarted, path, WORK, BREAK);
+
+        assert!(transitions.is_empty());
+        assert_eq!(t.state().planned_sec, 90);
+
+        t.clock.advance(Duration::from_secs(65));
+        t.observe();
+        let ended = t.take_ended();
+        assert_eq!(ended.len(), 1);
+        assert_eq!(ended[0].label.as_deref(), Some("写论文"));
+        assert_eq!(ended[0].planned_sec, 90);
+    }
+
+    /// `calpo start "写论文"` names something to work on, so it means work even
+    /// if the app is in the middle of a break -- and the break it interrupts is
+    /// still a break that happened.
+    #[test]
+    fn asking_for_work_during_a_break_gets_work() {
+        let dir = TempDir::new().expect("tempdir");
+        let mut t = timer(&dir);
+
+        t.start();
+        t.clock.advance(WORK);
+        t.observe();
+        t.take_ended();
+        assert_eq!(t.state().phase, Phase::Break, "the break started itself");
+
+        t.clock.advance(Duration::from_secs(10));
+        t.start_with(StartOptions {
+            label: Some("写论文".to_string()),
+            planned: None,
+            phase: Some(Phase::Work),
+        });
+
+        let ended = t.take_ended();
+        assert_eq!(ended.len(), 1);
+        assert_eq!(ended[0].phase, Phase::Break, "the break was cut short");
+        assert_eq!(ended[0].outcome, Outcome::Aborted);
+        assert_eq!(ended[0].label, None, "the new label is not the old one's");
+
+        let state = t.state();
+        assert_eq!(state.phase, Phase::Work);
+        assert_eq!(state.planned_sec, 60);
+        assert_eq!(state.run, RunState::Running);
+    }
+
+    /// `timer.json` belongs to the app. The CLI's own countdown has to be able
+    /// to run without writing to it or reading it -- otherwise starting the app
+    /// afterwards would restore a segment the CLI had already recorded.
+    #[test]
+    fn an_ephemeral_timer_neither_reads_nor_writes_a_state_file() {
+        let dir = TempDir::new().expect("tempdir");
+        let path = state_path(dir.path());
+
+        // A running segment left behind by the app, which the CLI must not adopt.
+        let mut app = timer(&dir);
+        app.start();
+        app.persist().expect("persist");
+        let before = std::fs::read_to_string(&path).expect("read");
+
+        let mut cli = Timer::ephemeral(FakeClock::new(), WORK, BREAK);
+        assert_eq!(cli.state().run, RunState::Idle);
+
+        cli.start();
+        cli.clock.advance(WORK);
+        cli.observe();
+        assert!(!cli.persist_due(), "there is nowhere to persist to");
+        cli.persist().expect("a no-op, not a failure");
+
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("read"),
+            before,
+            "the CLI wrote over the app's timer state"
+        );
+        assert_eq!(
+            std::fs::read_dir(dir.path()).expect("readable").count(),
+            1,
+            "the CLI left a file behind"
+        );
     }
 
     #[test]

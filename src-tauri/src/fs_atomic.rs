@@ -10,12 +10,106 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{AppError, IoResultExt, Result};
+
+/// How long to wait between attempts at a contended lock.
+///
+/// Short enough that an uncontended handover is imperceptible, long enough that
+/// waiting out a slow write is not a spin loop.
+const RETRY_INTERVAL: Duration = Duration::from_millis(20);
+
+/// An exclusive lock on `path`, released when this is dropped.
+///
+/// What keeps the app and the CLI from interleaving their writes to one vault.
+/// The lock is *advisory*: it binds the processes that ask for it -- which is
+/// every process this project ships -- and says nothing to a text editor. That
+/// is the intended trade rather than a shortcoming. These files exist to be
+/// hand-edited, and a lock the editor cannot see must not pretend to hold it
+/// back.
+#[derive(Debug)]
+pub struct FileLock {
+    file: File,
+    path: PathBuf,
+}
+
+impl FileLock {
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for FileLock {
+    fn drop(&mut self) {
+        // Closing the handle already releases the lock on every platform we
+        // target, so this is belt and braces -- and a failure while dropping is
+        // not something the caller could act on anyway.
+        let _ = self.file.unlock();
+    }
+}
+
+/// Take an exclusive lock on `path`, waiting up to `budget` for the holder to
+/// let go. [`Duration::ZERO`] makes it a single attempt.
+///
+/// Deliberately not `File::lock`, which blocks until it wins: the app's ticker
+/// takes this lock once a second to flush finished pomodoros, and a tick parked
+/// indefinitely behind another process is a stopped countdown. Giving up is
+/// [`AppError::VaultBusy`] rather than an I/O error because it is the one
+/// failure here that means "the same call will work shortly".
+///
+/// Note for callers inside one process: on Unix the lock is held by the open
+/// file description, so a second `lock_exclusive` on the same path from the same
+/// process contends with the first rather than passing through it. Nesting these
+/// would deadlock; the app serialises on its own vault mutex instead.
+pub fn lock_exclusive(path: &Path, budget: Duration) -> Result<FileLock> {
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent).at(parent)?;
+        }
+    }
+
+    // `create` and not `create_new`, and never truncated: the file is a
+    // rendezvous point rather than a flag, so finding one already there is the
+    // normal case and one left behind by a killed process means nothing that
+    // needs cleaning up. Its contents are never read.
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(path)
+        .at(path)?;
+
+    let deadline = Instant::now() + budget;
+    loop {
+        match file.try_lock() {
+            Ok(()) => {
+                return Ok(FileLock {
+                    file,
+                    path: path.to_path_buf(),
+                })
+            }
+            Err(std::fs::TryLockError::WouldBlock) => {}
+            Err(std::fs::TryLockError::Error(source)) => {
+                return Err(AppError::Io {
+                    path: path.to_path_buf(),
+                    source,
+                })
+            }
+        }
+
+        // Checked after the attempt, not before, so a zero budget still gets one
+        // honest try.
+        if Instant::now() >= deadline {
+            return Err(AppError::VaultBusy(path.to_path_buf()));
+        }
+        std::thread::sleep(RETRY_INTERVAL);
+    }
+}
 
 /// Replace `path`'s contents with `bytes`, atomically.
 ///
@@ -440,5 +534,74 @@ mod tests {
         assert!(read.records.is_empty());
         assert!(read.corrupt.is_empty());
         assert!(!read.truncated_tail);
+    }
+
+    /// The whole point of the lock: while one holder has it, nobody else does.
+    ///
+    /// Two handles in one process is a faithful stand-in for two processes.
+    /// Both `flock` and Windows' `LockFileEx` scope a lock to the open file
+    /// description rather than to the process, so these contend with each other
+    /// exactly as the app and the CLI would.
+    #[test]
+    fn a_second_lock_is_refused_while_the_first_is_held() {
+        let dir = TempDir::new().expect("tempdir");
+        let path = dir.path().join("write.lock");
+
+        let held = lock_exclusive(&path, Duration::ZERO).expect("first lock");
+
+        let err = lock_exclusive(&path, Duration::ZERO).expect_err("should be refused");
+        assert!(matches!(err, AppError::VaultBusy(_)), "{err:?}");
+
+        drop(held);
+        lock_exclusive(&path, Duration::ZERO).expect("lock once released");
+    }
+
+    #[test]
+    fn a_lock_waits_out_a_holder_that_finishes_inside_the_budget() {
+        let dir = TempDir::new().expect("tempdir");
+        let path = dir.path().join("write.lock");
+
+        let held = lock_exclusive(&path, Duration::ZERO).expect("first lock");
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(150));
+            drop(held);
+        });
+
+        // Far more budget than the holder needs, so this is not a race: it
+        // either waits, or the wait is not implemented.
+        lock_exclusive(&path, Duration::from_secs(10)).expect("should wait and win");
+    }
+
+    /// A zero budget still gets one honest attempt, rather than failing on an
+    /// already-expired deadline.
+    #[test]
+    fn an_uncontended_lock_succeeds_with_no_budget_at_all() {
+        let dir = TempDir::new().expect("tempdir");
+
+        lock_exclusive(&dir.path().join("write.lock"), Duration::ZERO).expect("lock");
+    }
+
+    #[test]
+    fn locking_creates_the_file_and_its_parent_directory() {
+        let dir = TempDir::new().expect("tempdir");
+        let path = dir.path().join(".index/write.lock");
+
+        let lock = lock_exclusive(&path, Duration::ZERO).expect("lock");
+
+        assert!(path.is_file());
+        assert_eq!(lock.path(), path);
+    }
+
+    /// The lock file is a rendezvous point, never a place to put anything. If a
+    /// future change starts writing to it, this is what says so.
+    #[test]
+    fn locking_never_touches_what_is_already_in_the_file() {
+        let dir = TempDir::new().expect("tempdir");
+        let path = dir.path().join("write.lock");
+        fs::write(&path, b"left by an older build").expect("seed");
+
+        drop(lock_exclusive(&path, Duration::ZERO).expect("lock"));
+
+        assert_eq!(fs::read(&path).expect("read"), b"left by an older build");
     }
 }

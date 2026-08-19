@@ -19,11 +19,16 @@ pub enum AppError {
     #[error("not a directory: {}", .0.display())]
     NotADirectory(PathBuf),
 
+    /// The decoder's own error is boxed because it is 96 bytes by itself --
+    /// four fifths of everything `AppError` is -- and this enum is returned by
+    /// value from nearly every function in the backend. `PathBuf` is eight
+    /// bytes wider on Windows than on unix, which is what put the unboxed
+    /// version over clippy's line there and nowhere else.
     #[error("{} is not valid TOML: {source}", path.display())]
     TomlDecode {
         path: PathBuf,
         #[source]
-        source: toml::de::Error,
+        source: Box<toml::de::Error>,
     },
 
     #[error("could not encode TOML: {0}")]
@@ -40,6 +45,16 @@ pub enum AppError {
     #[error("no vault is open")]
     NoVault,
 
+    /// The CLI equivalent of [`AppError::NoVault`]. Separate because it is the
+    /// one place the answer is a sentence the user can act on rather than a
+    /// state the UI draws.
+    #[error("no vault configured — open CalenPomo and choose one, or pass --vault <PATH>")]
+    VaultUnset,
+
+    /// The platform gave us nowhere to look for `settings.toml`.
+    #[error("could not determine this platform's configuration directory")]
+    NoConfigDir,
+
     #[error("no event with uid {0:?}")]
     EventNotFound(String),
 
@@ -51,6 +66,37 @@ pub enum AppError {
     #[error("a repeating event can only be changed by editing its RRULE in the .ics file")]
     RecurringNotEditable,
 
+    /// The local socket between `calpo` and the running app would not
+    /// cooperate. `endpoint` is a socket path on unix and a pipe name on
+    /// Windows.
+    #[error("{endpoint}: {source}")]
+    Ipc {
+        endpoint: String,
+        #[source]
+        source: std::io::Error,
+    },
+
+    /// Something answered on that socket but did not speak the protocol —
+    /// realistically a `calpo` and an app from different versions.
+    #[error("unexpected answer from the CalenPomo app: {0}")]
+    IpcProtocol(String),
+
+    /// The app understood the request and said no.
+    ///
+    /// Never a reason to fall back to doing the thing ourselves: something *is*
+    /// listening, so a second timer beside it would be exactly the collision the
+    /// socket exists to prevent.
+    #[error("CalenPomo declined: {0}")]
+    IpcRefused(String),
+
+    /// Another process is holding the vault's write lock.
+    ///
+    /// Always transient — the holder releases it as soon as its write finishes —
+    /// so this is worth retrying, unlike every other variant here.
+    #[error("another CalenPomo process is writing to {}; try again", .0.display())]
+    VaultBusy(PathBuf),
+
+    #[cfg(feature = "gui")]
     #[error("{0}")]
     Tauri(#[from] tauri::Error),
 

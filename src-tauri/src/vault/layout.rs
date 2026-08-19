@@ -8,6 +8,9 @@ pub const CALENDAR_DIR: &str = "calendar";
 pub const SESSIONS_DIR: &str = "sessions";
 pub const INDEX_DIR: &str = ".index";
 pub const CONFIG_FILE: &str = "config.toml";
+/// Lives inside `.index/`, so it is covered by "deleting that directory loses
+/// nothing" and never appears beside the user's own files.
+pub const LOCK_FILE: &str = "write.lock";
 
 impl Vault {
     pub fn calendar_dir(&self) -> PathBuf {
@@ -21,6 +24,18 @@ impl Vault {
     /// Derived data only. Deleting this directory must never lose anything.
     pub fn index_dir(&self) -> PathBuf {
         self.root().join(INDEX_DIR)
+    }
+
+    /// The file every writer takes an exclusive lock on before touching this
+    /// vault.
+    ///
+    /// Under `.index/` because it is exactly as disposable as the rest of it:
+    /// the file carries no contents, so losing it costs nothing, and it is
+    /// recreated on demand. It belongs to the vault rather than to the machine
+    /// so that the lock covers whoever is writing to *these files*, not whoever
+    /// happens to share a config directory.
+    pub fn lock_path(&self) -> PathBuf {
+        self.index_dir().join(LOCK_FILE)
     }
 
     pub fn config_path(&self) -> PathBuf {

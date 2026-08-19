@@ -30,13 +30,30 @@ aborted / invalidated),`integrations::pump` 落盘后发 `sessions://recorded`�
 每一列左半边是 `.ics` 的计划块、右半边是 session,顶部一条汇总(计划总时长、实际
 专注总时长、完成率)。session 是只读的,右半边不接任何手势。
 
+CLI(`calpo`)三条命令都已实现:`calpo today`、`calpo log --week [N]`、
+`calpo start [LABEL] [--for 25m]`。`--vault <PATH>` 与 `CALENPOMO_VAULT` 只对单次调用
+生效,永远不回写 `settings.toml`。
+
+`calpo start` 走两条路,选哪条不是用户要操心的事:GUI 在跑时,经本地 socket
+(`src-tauri/src/ipc.rs`)请 GUI 代跑,GUI 侧入口是 `commands::handle_ipc`;没有 GUI 时
+CLI 自己跑一个 `Timer::ephemeral`,前台画倒计时,Ctrl-C 记为 aborted。session 的
+`label` 字段至此才第一次有人写。**已知未闭合的缝**:CLI 正在前台跑时用户去开 GUI,
+两边会各跑各的计时;补这个缺口要靠不变量 #4(文件监听),那一条目前仍无代码。
+
+CI 与发布已接上:`.github/workflows/ci.yml` 在三个 OS 上跑两套 feature 的
+clippy/test,`release.yml` 由 `v*` tag 触发,产出 dmg / AppImage / NSIS 加一个单独编的
+`calpo`,挂成**草稿** release。`install.sh` 与自动更新(第 3、4 项)都还没有。
+
 ## 核心架构不变量(不得违反)
 
 ### 1. 文件是唯一真相,`.index/` 是可弃缓存
 
 所有 vault 内路径必须经由 `Vault` 的方法取得(`vault/layout.rs` 的 `calendar_file` /
-`sessions_file` / `config_path` / `index_dir`),禁止在别处拼接路径字符串。
+`sessions_file` / `config_path` / `index_dir` / `lock_path`),禁止在别处拼接路径字符串。
 写入顺序永远是「先落 `calendar/`、`sessions/` 下的文件,后更新 `.index/`」。
+
+写锁文件 `.index/write.lock` 也归这一条管:它没有内容,删掉不丢任何东西,取锁时按需
+重建。放 `.index/` 而不是配置目录,是因为锁保护的是「这些文件」而不是「这台机器」。
 
 **验收标准:删除整个 `.index/` 目录并重启,所有数据必须完好无损地重建。**
 新增任何索引后,`vault::tests::deleting_the_index_directory_is_repaired_without_touching_user_data`
@@ -51,6 +68,14 @@ aborted / invalidated),`integrations::pump` 落盘后发 `sessions://recorded`�
 
 前端禁止用 `setInterval` 累加计数,只能 `invoke('timer_state')` 每秒拉取计算结果;
 composable 放 `src/composables/useTimer.ts`。计时状态需持久化,冷启动能恢复现场。
+CLI 的前台倒计时同样只是 `Timer` 的显示器:每 200ms 调一次 `observe()` 取结果,
+自己不累加任何东西。
+
+`StartOptions` 的三个字段(label / 一次性时长 / 强制 phase)**只属于当前这一段**,
+生命周期与 `started_at` 完全一致,统一由 `clear_segment()` 抹掉。漏抹是静默错误 ——
+下一段会莫名带着上一段的标题、跑上一段的长度。一次性时长绝不许改 `set_durations`,
+否则 `calpo start x --50m` 会把用户 app 里的工作时长永久改掉。这三个字段也进
+`timer.json`:重启后恢复出来的必须是**同一段**,而不是一段长度被换掉的同名番茄钟。
 
 ### 3. 用户数据写入必须经过 `fs_atomic`
 
@@ -60,6 +85,12 @@ composable 放 `src/composables/useTimer.ts`。计时状态需持久化,冷启�
 (例外:只读的 `fs::read_to_string`,如 `settings.rs`、`vault/mod.rs` 读配置,
 `calendar/store.rs` 读 `.ics`;只读的 `fs::read_dir`,如 `calendar/store.rs` 列月份文件;
 以及测试代码。)
+
+跨进程互斥同样归这个模块:`fs_atomic::lock_exclusive` 是唯一持有锁文件句柄的地方,
+所以「`OpenOptions` 不出 `fs_atomic.rs`」这条不需要开新例外。调用方拿的是
+`Vault::lock()`(等 `LOCK_WAIT`)或 `Vault::try_lock()`(试一次就走)。
+**锁按「逻辑操作」持有,不是按单次 `atomic_write`** —— 跨月移动事件是两次写,
+读者绝不能撞进中间那个「两个分片里都有」的窗口。
 
 ### 4. 文件监听不得自激 —— 尚未实现
 
@@ -84,7 +115,9 @@ composable 放 `src/composables/useTimer.ts`。计时状态需持久化,冷启�
 ```
 
 `outcome` 取值:`completed` | `aborted` | `invalidated`(休眠导致)。
-时间戳一律带时区偏移量的 RFC 3339 格式。
+时间戳一律带时区偏移量的 RFC 3339 格式。`label` 只有 `calpo start "写论文"` 会写
+(app 界面上没有能打字的地方),其余行一律是 `null` —— 是写出来而不是省略,这样手翻文件
+时每一行形状一样。
 
 ## 实现期决策(代码里已定,改动前先读)
 
@@ -119,6 +152,68 @@ composable 放 `src/composables/useTimer.ts`。计时状态需持久化,冷启�
 `set_vault` 必须 `Vault::open` 成功后才 `Settings::save`,否则下次启动会卡在一个打不开的路径上。
 `VaultStatus` 是三态 tagged enum,`missing` 是正常状态而非错误,前端手工镜像在 `src/types/vault.ts`。
 
+**写锁与 CLI** — 锁用 `std::fs::File::{lock, try_lock, unlock}`(Rust 1.89 起进标准库,
+所以 `rust-version = "1.89"`),**不引 `fs4`/`fs2`**。锁是 advisory 的:它只约束本项目
+自己的进程,对文本编辑器无效 —— 这是有意的,这些文件本来就该能手改。
+GUI 的 ticker 用 `try_lock`(等 0 秒):`drain_sessions` 每秒跑一次,为了等 CLI 而卡住
+就等于停表,抢不到就把记录留在队列里下一秒再来。交互式写入用 `lock()` 等 5 秒。
+注意 unix 上 flock 归「打开的文件描述」所有,同进程再取一次同样会互斥,所以这两个
+方法**不可嵌套**;GUI 侧靠自己的 vault Mutex 串行化。
+
+CLI 与 GUI 共用一个 crate,靠默认开启的 `gui` feature 分开:`gui` 关掉后
+tauri / tauri-build / 四个插件全部不进依赖树,`calpo` 因此不需要 webkit2gtk 之类的系统
+依赖。新代码放 `vault` / `calendar` / `sessions` / `timer` / `fs_atomic` / `cli` 时,
+**不许让它们长出对 tauri 的依赖**。`cli/report.rs` 的汇总口径是 `src/lib/summary.ts`
+的镜像(计划块按窗口裁剪、session 按起点整取、all-day 不计、break 与 invalidated 不算
+focus),改一边必须改另一边。CLI 输出刻意全 ASCII 且把变宽的用户文本放在每行最后:
+`–` `·` `—` 都是 East Asian Ambiguous,CJK 终端下会画成双宽而把表格拉歪。
+`config_dir()` 手工复刻 Tauri 的 `app_config_dir()`(即 `dirs::config_dir()/${identifier}`),
+`APP_IDENTIFIER` 必须和 `tauri.conf.json` 的 `identifier` 保持一致。
+一个包两个 bin,所以 `Cargo.toml` 里有 `default-run = "calenpomo"` —— `npm run tauri dev`
+跑的正是裸 `cargo run`,没有这一行会直接报「could not determine which binary to run」。
+
+**本地 IPC** — `src-tauri/src/ipc.rs`,unix 是 `config_dir/cli.sock`,Windows 是命名管道。
+用 `interprocess` crate(std 没有命名管道);它只是 socket,不开端口、不解析主机名,
+和「永不联网」不冲突。**写锁解决不了这一半**:GUI 在跑时计时器在它内存里、每 10 秒重写
+`timer.json`,第二个进程自己起的倒计时会被直接覆盖掉,所以唯一的办法是请 GUI 代跑。
+
+- 一次连接一条请求一条回复,各一行 JSON,然后关闭。两端同属一个 crate,所以字段用
+  snake_case,不必迁就前端的 camelCase。
+- **连不上和被拒绝是两回事**:`send()` 只把 `NotFound`/`ConnectionRefused` 翻成
+  `Ok(None)`(「没开 app」,可以自己跑),其余都是错误。GUI 那边即使读不懂请求也必须回一句
+  `Refused` —— 沉默会被新版 CLI 读成「没开 app」,于是并排跑起第二个计时器。
+- 崩溃残留的 socket 文件靠「先 bind,`AddrInUse` 就试着 connect 一下」区分:有人应答说明
+  真有第二个 app 在跑,这一个就不抢;没人应答才是残骸,覆盖掉。
+- Windows 命名管道是全机器一个命名空间,所以名字里拼了 config_dir 的哈希 ——
+  否则两个账号同时登录会抢同一个管道。
+- socket 的保护就是 config 目录自身的权限(`interprocess` 在 macOS 上设不了 socket mode)。
+- GUI 侧 `serve_cli` 失败只打一行 stderr,不进 `IntegrationStatus`:那个面板讲的是
+  「这台机器允许 app 做什么」,不是「另一个程序能不能找到它」。
+
+`Ctrl-C` 在 CLI 自跑时用 `ctrlc` crate 只设一个 AtomicBool,记录动作发生在循环外、
+和别处一样握着 vault 写锁。**倒计时期间不持锁** —— 另一个终端里的 `calpo today`
+不该为了一个 25 分钟的番茄钟等在那里。
+
+**发布** — 两个 workflow。`ci.yml` 的矩阵是 ubuntu-22.04 / macos-latest /
+windows-latest,**Linux 用 22.04 而不是 latest**:AppImage 里带着链接时的 glibc,在
+24.04 上打的包到 22.04 和 Debian 12 就起不来,而 CI 只有和发布同一套环境才作数。
+`cargo fmt` 只在 Linux 跑一次(格式不会因平台而异),CLI 那一半排在 app 前面 ——
+它不需要系统库,而且它覆盖的是两边共享的代码,先看到它坏更有用。
+
+`release.yml` 里 `prepare` 一个 job 先建好草稿 release、把 `releaseId` 发给三个并行的
+构建 job:让 tauri-action 各自去 create 会撞出重复 release。草稿是因为 macOS 没签名,
+发布前那段 Gatekeeper 的话得由人过一眼。**bundler 只打包 app**,`calpo` 是同一个 crate
+里的第二个 bin,要自己 `--no-default-features` 编了再 `gh release upload` 挂上去;macOS
+上编两个 target 再 `lipo` 成一个通用二进制。`--bundles` 的取值按平台过滤,`tauri.conf.json`
+的 `"all"` 保持不动,收窄只发生在 workflow 里,这样本地 `npm run tauri build` 行为不变。
+macOS 只传 `dmg`:`.app` 顺路就建好了,而 tauri-action 的 `artifactPaths` **无条件包含
+`.app` 目录**,它会自己打成 `.tar.gz` 再上传 —— 那正是 `install.sh` 要的形状。每个产物
+配一个 `.sha256`(`sha256sum` 在 macOS 上没有,`shasum` 在 Windows 上没有,取其一)。
+
+版本号有四份(tag / `Cargo.toml` / `package.json` / `tauri.conf.json`),
+`.github/scripts/check-versions.sh` 是发布的第一道闸:对不上就不构建。这四份不一致时
+哪里都不报错,直到有人说 v0.2.0 装出来是 0.1.0。
+
 ## 代码约定
 
 - Rust:`cargo fmt` 与 `cargo clippy` 必须干净(命令见下)。
@@ -141,6 +236,20 @@ npm run typecheck        # 前端没有 ESLint/Prettier,lint 就是这个
 npm test                 # vitest,只测 src/lib/ 下的纯函数
 ```
 
+CLI 那一半要单独再跑一遍 —— `gui` 关掉后是另一套编译产物,只跑默认 feature 是测不到的:
+
+```bash
+cargo build  --manifest-path src-tauri/Cargo.toml --bin calpo --no-default-features
+cargo test   --manifest-path src-tauri/Cargo.toml --no-default-features
+cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --no-default-features -- -D warnings
+```
+
+打 tag 之前先自己跑一遍版本闸(CI 里跑的是同一个脚本):
+
+```bash
+.github/scripts/check-versions.sh v0.2.0
+```
+
 ## 明确不做的事(v1)
 
 不要主动实现以下任何一项,即使看起来顺手:
@@ -160,7 +269,6 @@ npm test                 # vitest,只测 src/lib/ 下的纯函数
 - `opening_a_fresh_directory_builds_the_whole_skeleton` 断言 `report.created` 的精确顺序,是否算契约。
 - 前端不加 ESLint/Prettier 是刻意还是未做(vitest 已经加了,lint 仍然没有)。
 - `.index/cache.db` 这个文件名代码里还不存在,是否还作数。
-- `bundle.targets: "all"` 对自用应用是否必要。
 - 全天(DATE 值)事件目前渲染在日期头下面一条只读窄条里,这是实现时自己定的,要不要保留。
 - 周视图固定周一起始,没有做成可配置。
 

@@ -1,0 +1,213 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  # Re-runnable by hand: dispatch it with the tag as the ref.
+  workflow_dispatch:
+
+# Creating the draft release and uploading assets to it.
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  # Never cancel: a half-uploaded release is worse than a duplicated run.
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  prepare:
+    name: prepare
+    runs-on: ubuntu-22.04
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+      release_id: ${{ steps.release.outputs.release_id }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Refuse anything that is not a tag
+        if: github.ref_type != 'tag'
+        run: |
+          echo "This workflow builds a tag; dispatch it with a tag as the ref." >&2
+          exit 1
+
+      - id: check
+        run: .github/scripts/check-versions.sh "${{ github.ref_name }}"
+
+      # The release is made here rather than by tauri-action so that three
+      # parallel builds cannot each decide it is the one that has to create it.
+      # They are handed its id and only upload.
+      - id: release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ steps.check.outputs.version }}
+        run: |
+          # `releases/tags/<tag>` does not return drafts, so list and match.
+          find_release() {
+            gh api --paginate "repos/$GITHUB_REPOSITORY/releases" \
+              --jq "[.[] | select(.tag_name == \"$TAG\")] | .[0].id // empty"
+          }
+          id=$(find_release)
+          if [ -z "$id" ]; then
+            cat > notes.md <<'NOTES'
+          Each file below has a matching `.sha256`.
+
+          The macOS build is not signed or notarised. The first time you open it,
+          right-click the app and choose Open, or run
+          `xattr -dr com.apple.quarantine /Applications/CalenPomo.app`.
+
+          `calpo` is the command line half; put it anywhere on your PATH.
+          NOTES
+            gh release create "$TAG" --draft \
+              --title "CalenPomo $VERSION" --notes-file notes.md > /dev/null
+            id=$(find_release)
+          fi
+          echo "release_id=$id" >> "$GITHUB_OUTPUT"
+          echo "release $id for $TAG"
+
+  bundle:
+    name: ${{ matrix.name }}
+    needs: prepare
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        # bash on Windows too, so that one script per step works everywhere.
+        shell: bash
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS (universal)
+            os: macos-latest
+            # One download for both kinds of Mac. `dmg` alone is deliberate: the
+            # .app gets built on the way there anyway, and tauri-action tars it
+            # up and uploads that too, which is the form install.sh wants.
+            args: --target universal-apple-darwin --bundles dmg
+            rust_targets: aarch64-apple-darwin,x86_64-apple-darwin
+            cli: calpo-macos-universal
+          - name: Linux (x86_64)
+            # Not ubuntu-latest: an AppImage carries whatever glibc it was
+            # linked against, so one built on 24.04 refuses to start on 22.04
+            # and on Debian 12.
+            os: ubuntu-22.04
+            args: --bundles appimage
+            rust_targets: ''
+            cli: calpo-linux-x86_64
+          - name: Windows (x86_64)
+            os: windows-latest
+            args: --bundles nsis
+            rust_targets: ''
+            cli: calpo-windows-x86_64.exe
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_targets }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          # A release build shares nothing with the debug one CI caches.
+          key: release
+
+      - name: Install Linux system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libxdo-dev \
+            libssl-dev \
+            file \
+            patchelf
+
+      # tauri-action does not do this for us, and `beforeBuildCommand` is
+      # `npm run build`.
+      - run: npm ci
+
+      - name: Build and upload the app
+        id: tauri
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          releaseId: ${{ needs.prepare.outputs.release_id }}
+          args: ${{ matrix.args }}
+
+      # The bundler only ever packages the app. `calpo` is a second binary in
+      # the same crate, so it is built and attached by hand -- without the `gui`
+      # feature, which is what keeps it clear of Tauri's system dependencies.
+      - name: Build calpo (universal)
+        if: runner.os == 'macOS'
+        run: |
+          mkdir -p artifacts
+          for target in aarch64-apple-darwin x86_64-apple-darwin; do
+            cargo build --manifest-path src-tauri/Cargo.toml \
+              --release --no-default-features --bin calpo --target "$target"
+          done
+          lipo -create -output "artifacts/${{ matrix.cli }}" \
+            src-tauri/target/aarch64-apple-darwin/release/calpo \
+            src-tauri/target/x86_64-apple-darwin/release/calpo
+
+      - name: Build calpo
+        if: runner.os != 'macOS'
+        run: |
+          mkdir -p artifacts
+          cargo build --manifest-path src-tauri/Cargo.toml \
+            --release --no-default-features --bin calpo
+          source=src-tauri/target/release/calpo
+          if [ "$RUNNER_OS" = Windows ]; then
+            source=$source.exe
+          fi
+          cp "$source" "artifacts/${{ matrix.cli }}"
+
+      - name: Checksum everything this release carries
+        env:
+          BUNDLES: ${{ steps.tauri.outputs.artifactPaths }}
+        run: |
+          # Windows reports its paths with the other kind of slash.
+          jq -r '.[] | if type == "object" then .path else . end' <<<"$BUNDLES" \
+            | tr '\\' '/' \
+            | while read -r path; do
+                # A .app is a directory; what gets uploaded is its tarball.
+                if [ ! -f "$path" ] && [ -f "$path.tar.gz" ]; then
+                  path=$path.tar.gz
+                fi
+                if [ ! -f "$path" ]; then
+                  continue
+                fi
+                cp "$path" artifacts/
+              done
+          cd artifacts
+          for file in *; do
+            case "$file" in
+              *.sha256) continue ;;
+            esac
+            # sha256sum is missing on macOS, shasum on Windows. Same output.
+            if command -v sha256sum > /dev/null; then
+              sha256sum "$file" > "$file.sha256"
+            else
+              shasum -a 256 "$file" > "$file.sha256"
+            fi
+          done
+          ls -l
+
+      # Only the pieces tauri-action did not upload: itself and the sums.
+      - name: Attach calpo and the checksums
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${{ github.ref_name }}" \
+            "artifacts/${{ matrix.cli }}" artifacts/*.sha256 --clobber

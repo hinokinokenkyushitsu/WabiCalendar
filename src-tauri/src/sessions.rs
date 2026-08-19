@@ -48,9 +48,10 @@ pub struct Session {
     pub started_at: DateTime<FixedOffset>,
     pub ended_at: DateTime<FixedOffset>,
     pub outcome: Outcome,
-    /// Nothing writes this yet — there is no way to label a pomodoro in v1 —
-    /// but the field is written out as `null` rather than omitted so that every
-    /// line has the same shape for anyone reading the file by hand.
+    /// What the user called it, when they said. Only `calpo start "写论文"`
+    /// sets this — the app's own start button has nowhere to type one — so most
+    /// lines carry `null`, written out rather than omitted so that every line
+    /// has the same shape for anyone reading the file by hand.
     #[serde(default)]
     pub label: Option<String>,
 }
@@ -117,7 +118,7 @@ impl<'a, Z: TimeZone> Sessions<'a, Z> {
             started_at: self.stamp(ended.started_at),
             ended_at: self.stamp(ended.ended_at),
             outcome: ended.outcome,
-            label: None,
+            label: ended.label.clone(),
         };
 
         append_jsonl(&self.file(session.started_at), &session)?;
@@ -227,6 +228,7 @@ mod tests {
             started_at: at(start),
             ended_at: at(end),
             outcome,
+            label: None,
         }
     }
 
@@ -276,6 +278,29 @@ mod tests {
             line.contains(r#""ended_at":"2026-07-23T14:25:00+09:00""#),
             "{line}"
         );
+    }
+
+    /// `calpo start "写论文"` is the only thing that fills this field in, and a
+    /// label the user typed is the one part of a record they will go looking
+    /// for by eye.
+    #[test]
+    fn a_label_survives_the_round_trip_to_disk() {
+        let (_dir, vault) = vault();
+        let sessions = Sessions::new(&vault, jst());
+
+        let mut ended = work("2026-07-23T05:00:00Z", "2026-07-23T05:25:00Z");
+        ended.label = Some("写论文".to_string());
+        sessions.record(&ended).expect("record");
+
+        let found = sessions
+            .range(utc("2026-07-22T15:00:00Z"), utc("2026-07-23T15:00:00Z"))
+            .expect("range");
+
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].label.as_deref(), Some("写论文"));
+        // And in the file itself, since that is what the user reads.
+        let text = fs::read_to_string(vault.sessions_file(2026, 7, 23)).expect("read");
+        assert!(text.contains(r#""label":"写论文""#), "{text}");
     }
 
     /// The file is the day the user would go looking in, not the UTC one.
