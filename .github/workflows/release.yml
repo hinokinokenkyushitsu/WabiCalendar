@@ -169,7 +169,6 @@ jobs:
           cp "$universal/calpo" "artifacts/${{ matrix.cli }}"
 
       - name: Build and upload the app
-        id: tauri
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -203,57 +202,59 @@ jobs:
           fi
           cp "$source" "artifacts/${{ matrix.cli }}"
 
-      - name: Checksum everything this release carries
-        env:
-          BUNDLES: ${{ steps.tauri.outputs.artifactPaths }}
-        run: |
-          # Windows reports its paths with the other kind of slash.
-          jq -r '.[] | if type == "object" then .path else . end' <<<"$BUNDLES" \
-            | tr '\\' '/' \
-            | while read -r path; do
-                # A .app is a directory; what gets uploaded is its tarball.
-                if [ ! -f "$path" ] && [ -f "$path.tar.gz" ]; then
-                  path=$path.tar.gz
-                fi
-                if [ ! -f "$path" ]; then
-                  continue
-                fi
-                cp "$path" artifacts/
-              done
-          cd artifacts
-          for file in *; do
-            case "$file" in
-              # A signature is checked by the updater, not by a person, and a
-              # checksum of one helps nobody.
-              *.sha256 | *.sig) continue ;;
-            esac
-            # sha256sum is missing on macOS, shasum on Windows. Same output.
-            if command -v sha256sum > /dev/null; then
-              sha256sum "$file" > "$file.sha256"
-            else
-              shasum -a 256 "$file" > "$file.sha256"
-            fi
-          done
-          ls -l
-
-      # Only the pieces tauri-action did not upload: itself and the sums.
-      - name: Attach calpo and the checksums
+      # The one piece tauri-action knows nothing about. Checksums for everything,
+      # this included, are made by the `finish` job from the uploaded assets.
+      - name: Attach calpo
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release upload "${{ github.ref_name }}" \
-            "artifacts/${{ matrix.cli }}" artifacts/*.sha256 --clobber
+            "artifacts/${{ matrix.cli }}" --clobber
 
-  # What an installed copy actually reads when the user picks "Check for
-  # Updates…". One job rather than three because assembling it means reading
-  # every platform's signature at once, and because the URLs have to be the ones
-  # the tag will have -- a draft's own asset URLs are not those.
-  latest-json:
-    name: latest.json
+  # Everything that can only be done once all three platforms have landed.
+  finish:
+    name: checksums and latest.json
     needs: [prepare, bundle]
     runs-on: ubuntu-22.04
+    # This job checks nothing out, and `gh release` asks git which repository it
+    # is in unless told. `gh api` never needed it -- the repository is in the URL
+    # there -- which is why the first run got all the way to the last command
+    # before saying "not a git repository", and why the release notes came back
+    # empty instead of failing.
+    env:
+      GH_REPO: ${{ github.repository }}
     steps:
-      - name: Assemble it from the signatures and attach it
+      # Hashed from the assets as they now exist, never from the local build
+      # output: tauri-action renames some of what it uploads (the macOS tarball
+      # gains its architecture), and a checksum filed under a name nothing is
+      # served as helps nobody. install.sh looks for exactly `<asset>.sha256`.
+      - name: Checksum every asset
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          RELEASE_ID: ${{ needs.prepare.outputs.release_id }}
+        run: |
+          mkdir -p sums
+          gh api --paginate "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets" \
+            --jq '.[] | "\(.id) \(.name)"' \
+            | while read -r id name; do
+                # A signature is checked by the updater, not by a person, and
+                # latest.json is not uploaded yet.
+                case "$name" in
+                  *.sha256 | *.sig) continue ;;
+                esac
+                gh api "repos/$GITHUB_REPOSITORY/releases/assets/$id" \
+                  -H "Accept: application/octet-stream" > "sums/$name"
+                (cd sums && sha256sum "$name" > "$name.sha256" && rm "$name")
+              done
+          ls sums
+          gh release upload "$TAG" sums/*.sha256 --clobber
+
+      # What an installed copy reads when the user picks "Check for Updates…".
+      # One job rather than three because assembling it means reading every
+      # platform's signature at once, and because the URLs have to be the ones
+      # the tag will serve -- a draft's own asset URLs are not those.
+      - name: Assemble latest.json from the signatures and attach it
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
