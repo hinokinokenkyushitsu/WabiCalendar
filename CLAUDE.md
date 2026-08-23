@@ -44,10 +44,17 @@ CLI 自己跑一个 `Timer::ephemeral`,前台画倒计时,Ctrl-C 记为 aborted�
 CI 与发布已接上:`.github/workflows/ci.yml` 在三个 OS 上跑两套 feature 的
 clippy/test,`release.yml` 由 `v*` tag 触发,产出 dmg / AppImage / NSIS 加一个单独编的
 `calpo`,挂成**草稿** release,并拼出 `latest.json`。托盘里的「Check for Updates…」
-已经接上 `tauri-plugin-updater`。`install.sh`(第 3 项)与 README(第 5 项)还没有。
+已经接上 `tauri-plugin-updater`。`install.sh` / `install.ps1` 与 `uninstall.sh` /
+`uninstall.ps1` 都已就位;README(第 5 项)还没有。
 
 **自动更新尚未端到端验证过**:那需要两个已发布的 release(装着旧的去收新的),
-而现在一个 tag 都还没打。已验证的只到「产物签名与 `latest.json` 正确生成」。
+而 v0.1.0 至今仍是草稿。已验证的只到「产物签名与 `latest.json` 正确生成」。
+
+**macOS 的安装与卸载已在真机上端到端跑过**:拿 v0.1.0 草稿里 CI 真产出的
+`CalenPomo_universal.app.tar.gz` 与 `calpo-macos-universal`,走 `install.sh` 本身装进
+`/Applications`,启动、加载 LaunchAgent,再由 `uninstall.sh` 清空并核对无残留、vault 无损。
+POSIX 那一半在 `dash` 和 bash 的 sh 模式下各跑一遍。**Windows 的两个 `.ps1` 从未被执行过,
+连语法都没解析过** —— 手边没有 PowerShell。Linux 那一半也只有桩测,没有真机。
 
 ## 核心架构不变量(不得违反)
 
@@ -241,6 +248,35 @@ Linux 的图标从 AppImage 自己里抽,但要用**已经装好的那一份**:c
 `Icon=` 那一行,不是失败。
 
 `calpo` 两个平台统一装 `~/.local/bin`,不要 sudo;不在 PATH 上就把该加的那行打印出来。
+
+**卸载脚本** — `uninstall.sh` / `uninstall.ps1`,同样是全函数、最后一行才调用。
+
+要删的东西分三层,只有前两层归它管:安装器放的(app、`calpo`、`.desktop`、图标),
+和 **app 自己跑出来的**(配置目录、LaunchAgent/autostart 注册项、WebView 缓存)。
+第三层是 vault —— 你自己挑的目录里你自己的 `.ics` 和 `.jsonl`,**默认一根汗毛不动**,
+只把路径和「要删就跑这条」打印出来。`--purge` 才连它一起删,而且是**第二次单独确认**、
+先回显完整路径:同意卸载一个程序不等于同意扔掉用它写出来的文档。vault 路径必须在删配置
+目录**之前**从 `settings.toml` 读出来,顺序反了就再也没人知道它在哪。
+
+macOS 的缓存目录**有两个名字**:装成 app 时按 bundle id(`com.hinoki.calenpomo`),
+`npm run tauri dev` 裸跑二进制时按可执行文件名(`calenpomo`),两族会同时存在,只扫一个
+就留一半在盘上。同理**没有哪个进程叫 `CalenPomo`** —— `CFBundleExecutable` 是 Cargo 的
+bin 名即小写的 `calenpomo`,`pgrep -x CalenPomo` 永远匹配不上;AppleScript 的
+`quit app "CalenPomo"` 寻址的是 bundle,那个才叫 CalenPomo。删之前必须先让 app 退出:
+托盘进程每 10 秒重写一次 `timer.json`,删掉的文件会自己长回来。
+LaunchAgent 也**不是删掉 plist 就完**,得先 `launchctl bootout`,否则 launchd 还攥着那个
+job,继续去启动一个已经不存在的二进制。
+
+`curl … | sh` 时 **stdin 是脚本本身**,交互确认只能走 `/dev/tty`;没有 tty 就退出并要求
+`--yes`,绝不把沉默当成同意。探测 tty 不能用 `[ -r /dev/tty ]`(没有控制终端时它照样为真),
+要真去 open;而且那次 open **必须放进子 shell 且不能用 `:`** —— 对 POSIX 特殊内建命令做
+重定向失败,规范要求 shell 直接退出,dash 上表现为静默 exit 2(这条是 dash 抓出来的,
+bash 的 sh 模式看不见)。
+
+`install.sh` 从来只**打印**该往 shell profile 里加的那行、没写过任何文件,所以
+`uninstall.sh` 也不改 profile,只告诉你哪个文件里还有它。`install.ps1` 反过来是真的改了
+用户 PATH,所以 `uninstall.ps1` 必须把它撤掉 —— 谁写的谁负责收。Windows 上 NSIS 卸载器
+不给 `_?=<installdir>` 就会把自己拷到临时目录后立刻返回,`-Wait` 等了个寂寞。
 
 **发布** — 两个 workflow。`ci.yml` 的矩阵是 ubuntu-22.04 / macos-latest /
 windows-latest,**Linux 用 22.04 而不是 latest**:AppImage 里带着链接时的 glibc,在
