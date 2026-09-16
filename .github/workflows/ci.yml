@@ -39,7 +39,7 @@ jobs:
         with:
           workspaces: src-tauri
 
-      # Only the `gui` half needs these -- `calpo` is built without the feature
+      # Only the `gui` half needs these -- `wabi` is built without the feature
       # precisely so it does not -- but this job builds both halves.
       - name: Install Linux system dependencies
         if: runner.os == 'Linux'
@@ -61,10 +61,10 @@ jobs:
       # The CLI half goes first: it is the cheap one, it needs no system
       # libraries, and everything it covers is code the app shares -- so when it
       # is the half that breaks, that is the more useful thing to be told first.
-      - name: clippy (calpo)
+      - name: clippy (wabi)
         run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --no-default-features -- -D warnings
 
-      - name: test (calpo)
+      - name: test (wabi)
         run: cargo test --manifest-path src-tauri/Cargo.toml --no-default-features
 
       - name: clippy (app)

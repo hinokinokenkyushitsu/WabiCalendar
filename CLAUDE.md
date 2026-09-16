@@ -31,11 +31,11 @@ aborted / invalidated),`integrations::pump` 落盘后发 `sessions://recorded`�
 每一列左半边是 `.ics` 的计划块、右半边是 session,顶部一条汇总(计划总时长、实际
 专注总时长、完成率)。session 是只读的,右半边不接任何手势。
 
-CLI(`calpo`)三条命令都已实现:`calpo today`、`calpo log --week [N]`、
-`calpo start [LABEL] [--for 25m]`。`--vault <PATH>` 与 `CALENPOMO_VAULT` 只对单次调用
+CLI(`wabi`)三条命令都已实现:`wabi today`、`wabi log --week [N]`、
+`wabi start [LABEL] [--for 25m]`。`--vault <PATH>` 与 `WABICALENDAR_VAULT` 只对单次调用
 生效,永远不回写 `settings.toml`。
 
-`calpo start` 走两条路,选哪条不是用户要操心的事:GUI 在跑时,经本地 socket
+`wabi start` 走两条路,选哪条不是用户要操心的事:GUI 在跑时,经本地 socket
 (`src-tauri/src/ipc.rs`)请 GUI 代跑,GUI 侧入口是 `commands::handle_ipc`;没有 GUI 时
 CLI 自己跑一个 `Timer::ephemeral`,前台画倒计时,Ctrl-C 记为 aborted。session 的
 `label` 字段至此才第一次有人写。**已知未闭合的缝**:CLI 正在前台跑时用户去开 GUI,
@@ -43,7 +43,7 @@ CLI 自己跑一个 `Timer::ephemeral`,前台画倒计时,Ctrl-C 记为 aborted�
 
 CI 与发布已接上:`.github/workflows/ci.yml` 在三个 OS 上跑两套 feature 的
 clippy/test,`release.yml` 由 `v*` tag 触发,产出 dmg / AppImage / NSIS 加一个单独编的
-`calpo`,挂成**草稿** release,并拼出 `latest.json`。托盘里的「Check for Updates…」
+`wabi`,挂成**草稿** release,并拼出 `latest.json`。托盘里的「Check for Updates…」
 已经接上 `tauri-plugin-updater`。`install.sh` / `install.ps1` 与 `uninstall.sh` /
 `uninstall.ps1` 都已就位;README(第 5 项)还没有。
 
@@ -51,7 +51,7 @@ clippy/test,`release.yml` 由 `v*` tag 触发,产出 dmg / AppImage / NSIS 加�
 而 v0.1.0 至今仍是草稿。已验证的只到「产物签名与 `latest.json` 正确生成」。
 
 **macOS 的安装与卸载已在真机上端到端跑过**:拿 v0.1.0 草稿里 CI 真产出的
-`CalenPomo_universal.app.tar.gz` 与 `calpo-macos-universal`,走 `install.sh` 本身装进
+`WabiCalendar_universal.app.tar.gz` 与 `wabi-macos-universal`,走 `install.sh` 本身装进
 `/Applications`,启动、加载 LaunchAgent,再由 `uninstall.sh` 清空并核对无残留、vault 无损。
 POSIX 那一半在 `dash` 和 bash 的 sh 模式下各跑一遍。**Windows 的两个 `.ps1` 从未被执行过,
 连语法都没解析过** —— 手边没有 PowerShell。Linux 那一半也只有桩测,没有真机。
@@ -86,7 +86,7 @@ CLI 的前台倒计时同样只是 `Timer` 的显示器:每 200ms 调一次 `obs
 `StartOptions` 的三个字段(label / 一次性时长 / 强制 phase)**只属于当前这一段**,
 生命周期与 `started_at` 完全一致,统一由 `clear_segment()` 抹掉。漏抹是静默错误 ——
 下一段会莫名带着上一段的标题、跑上一段的长度。一次性时长绝不许改 `set_durations`,
-否则 `calpo start x --50m` 会把用户 app 里的工作时长永久改掉。这三个字段也进
+否则 `wabi start x --50m` 会把用户 app 里的工作时长永久改掉。这三个字段也进
 `timer.json`:重启后恢复出来的必须是**同一段**,而不是一段长度被换掉的同名番茄钟。
 
 ### 3. 用户数据写入必须经过 `fs_atomic`
@@ -127,7 +127,7 @@ CLI 的前台倒计时同样只是 `Timer` 的显示器:每 200ms 调一次 `obs
 ```
 
 `outcome` 取值:`completed` | `aborted` | `invalidated`(休眠导致)。
-时间戳一律带时区偏移量的 RFC 3339 格式。`label` 只有 `calpo start "写论文"` 会写
+时间戳一律带时区偏移量的 RFC 3339 格式。`label` 只有 `wabi start "写论文"` 会写
 (app 界面上没有能打字的地方),其余行一律是 `null` —— 是写出来而不是省略,这样手翻文件
 时每一行形状一样。
 
@@ -173,7 +173,7 @@ GUI 的 ticker 用 `try_lock`(等 0 秒):`drain_sessions` 每秒跑一次,为了
 方法**不可嵌套**;GUI 侧靠自己的 vault Mutex 串行化。
 
 CLI 与 GUI 共用一个 crate,靠默认开启的 `gui` feature 分开:`gui` 关掉后
-tauri / tauri-build / 四个插件全部不进依赖树,`calpo` 因此不需要 webkit2gtk 之类的系统
+tauri / tauri-build / 四个插件全部不进依赖树,`wabi` 因此不需要 webkit2gtk 之类的系统
 依赖。新代码放 `vault` / `calendar` / `sessions` / `timer` / `fs_atomic` / `cli` 时,
 **不许让它们长出对 tauri 的依赖**。`cli/report.rs` 的汇总口径是 `src/lib/summary.ts`
 的镜像(计划块按窗口裁剪、session 按起点整取、all-day 不计、break 与 invalidated 不算
@@ -181,7 +181,7 @@ focus),改一边必须改另一边。CLI 输出刻意全 ASCII 且把变宽的�
 `–` `·` `—` 都是 East Asian Ambiguous,CJK 终端下会画成双宽而把表格拉歪。
 `config_dir()` 手工复刻 Tauri 的 `app_config_dir()`(即 `dirs::config_dir()/${identifier}`),
 `APP_IDENTIFIER` 必须和 `tauri.conf.json` 的 `identifier` 保持一致。
-一个包两个 bin,所以 `Cargo.toml` 里有 `default-run = "calenpomo"` —— `npm run tauri dev`
+一个包两个 bin,所以 `Cargo.toml` 里有 `default-run = "wabicalendar"` —— `npm run tauri dev`
 跑的正是裸 `cargo run`,没有这一行会直接报「could not determine which binary to run」。
 
 **本地 IPC** — `src-tauri/src/ipc.rs`,unix 是 `config_dir/cli.sock`,Windows 是命名管道。
@@ -203,7 +203,7 @@ focus),改一边必须改另一边。CLI 输出刻意全 ASCII 且把变宽的�
   「这台机器允许 app 做什么」,不是「另一个程序能不能找到它」。
 
 `Ctrl-C` 在 CLI 自跑时用 `ctrlc` crate 只设一个 AtomicBool,记录动作发生在循环外、
-和别处一样握着 vault 写锁。**倒计时期间不持锁** —— 另一个终端里的 `calpo today`
+和别处一样握着 vault 写锁。**倒计时期间不持锁** —— 另一个终端里的 `wabi today`
 不该为了一个 25 分钟的番茄钟等在那里。
 
 **自动更新** — `tauri-plugin-updater`,代码在 `integrations/updates.rs`。入口只有托盘菜单
@@ -214,7 +214,7 @@ dialog 的 `blocking_show` 是合法的:它只是不许在主线程调。下载�
 面板讲的是「这台机器允许 app 做什么」,而这件事问的是服务器。
 
 公钥在 `tauri.conf.json` 的 `plugins.updater.pubkey`,私钥在仓库 secret
-`TAURI_SIGNING_PRIVATE_KEY`,本机副本在 `~/.tauri/calenpomo.key`(无口令)。**私钥丢了
+`TAURI_SIGNING_PRIVATE_KEY`,本机副本在 `~/.tauri/wabicalendar.key`(无口令)。**私钥丢了
 就再也发不出能被已安装版本接受的更新**。代价是本地 `npm run tauri build` 不导出私钥会直接
 失败(`A public key has been found, but no private key`),临时打包加 `--no-sign`。
 
@@ -234,8 +234,8 @@ URL 不是发布之后的那个。所以 `release.yml` 里由 `latest-json` 一�
 是一堆定义好却没跑的函数,而不是执行了一半的安装。
 
 产物按**名字后缀匹配**,不是拼出来的:版本号一变,脚本不用跟着改。取资产列表时就把
-`.sha256` 和 `.sig` 滤掉 —— `calpo-linux-x86_64.sha256` 匹配得上
-`calpo-linux-*` 的每一个模式,不滤会挑到校验和本身。每个产物都对 `.sha256` 校验,**没有
+`.sha256` 和 `.sig` 滤掉 —— `wabi-linux-x86_64.sha256` 匹配得上
+`wabi-linux-*` 的每一个模式,不滤会挑到校验和本身。每个产物都对 `.sha256` 校验,**没有
 校验和是拒绝安装而不是跳过**。
 
 macOS 装 `.app.tar.gz` 而不是 dmg(不用挂载)。`/Applications` 对管理员组是可写的,所以
@@ -247,22 +247,22 @@ Linux 的图标从 AppImage 自己里抽,但要用**已经装好的那一份**:c
 不能执行的 AppImage 也就不能解包(这条是桩测抓出来的,不是想出来的)。抽不到就不写
 `Icon=` 那一行,不是失败。
 
-`calpo` 两个平台统一装 `~/.local/bin`,不要 sudo;不在 PATH 上就把该加的那行打印出来。
+`wabi` 两个平台统一装 `~/.local/bin`,不要 sudo;不在 PATH 上就把该加的那行打印出来。
 
 **卸载脚本** — `uninstall.sh` / `uninstall.ps1`,同样是全函数、最后一行才调用。
 
-要删的东西分三层,只有前两层归它管:安装器放的(app、`calpo`、`.desktop`、图标),
+要删的东西分三层,只有前两层归它管:安装器放的(app、`wabi`、`.desktop`、图标),
 和 **app 自己跑出来的**(配置目录、LaunchAgent/autostart 注册项、WebView 缓存)。
 第三层是 vault —— 你自己挑的目录里你自己的 `.ics` 和 `.jsonl`,**默认一根汗毛不动**,
 只把路径和「要删就跑这条」打印出来。`--purge` 才连它一起删,而且是**第二次单独确认**、
 先回显完整路径:同意卸载一个程序不等于同意扔掉用它写出来的文档。vault 路径必须在删配置
 目录**之前**从 `settings.toml` 读出来,顺序反了就再也没人知道它在哪。
 
-macOS 的缓存目录**有两个名字**:装成 app 时按 bundle id(`com.hinoki.calenpomo`),
-`npm run tauri dev` 裸跑二进制时按可执行文件名(`calenpomo`),两族会同时存在,只扫一个
-就留一半在盘上。同理**没有哪个进程叫 `CalenPomo`** —— `CFBundleExecutable` 是 Cargo 的
-bin 名即小写的 `calenpomo`,`pgrep -x CalenPomo` 永远匹配不上;AppleScript 的
-`quit app "CalenPomo"` 寻址的是 bundle,那个才叫 CalenPomo。删之前必须先让 app 退出:
+macOS 的缓存目录**有两个名字**:装成 app 时按 bundle id(`com.hinoki.wabicalendar`),
+`npm run tauri dev` 裸跑二进制时按可执行文件名(`wabicalendar`),两族会同时存在,只扫一个
+就留一半在盘上。同理**没有哪个进程叫 `WabiCalendar`** —— `CFBundleExecutable` 是 Cargo 的
+bin 名即小写的 `wabicalendar`,`pgrep -x WabiCalendar` 永远匹配不上;AppleScript 的
+`quit app "WabiCalendar"` 寻址的是 bundle,那个才叫 WabiCalendar。删之前必须先让 app 退出:
 托盘进程每 10 秒重写一次 `timer.json`,删掉的文件会自己长回来。
 LaunchAgent 也**不是删掉 plist 就完**,得先 `launchctl bootout`,否则 launchd 还攥着那个
 job,继续去启动一个已经不存在的二进制。
@@ -286,7 +286,7 @@ windows-latest,**Linux 用 22.04 而不是 latest**:AppImage 里带着链接时�
 
 `release.yml` 里 `prepare` 一个 job 先建好草稿 release、把 `releaseId` 发给三个并行的
 构建 job:让 tauri-action 各自去 create 会撞出重复 release。草稿是因为 macOS 没签名,
-发布前那段 Gatekeeper 的话得由人过一眼。**bundler 只打包 app**,`calpo` 是同一个 crate
+发布前那段 Gatekeeper 的话得由人过一眼。**bundler 只打包 app**,`wabi` 是同一个 crate
 里的第二个 bin,要自己 `--no-default-features` 编了再 `gh release upload` 挂上去;macOS
 上编两个 target 再 `lipo` 成一个通用二进制。`--bundles` 的取值按平台过滤,`tauri.conf.json`
 的 `"all"` 保持不动,收窄只发生在 workflow 里,这样本地 `npm run tauri build` 行为不变。
@@ -331,7 +331,7 @@ npm test                 # vitest,只测 src/lib/ 下的纯函数
 CLI 那一半要单独再跑一遍 —— `gui` 关掉后是另一套编译产物,只跑默认 feature 是测不到的:
 
 ```bash
-cargo build  --manifest-path src-tauri/Cargo.toml --bin calpo --no-default-features
+cargo build  --manifest-path src-tauri/Cargo.toml --bin wabi --no-default-features
 cargo test   --manifest-path src-tauri/Cargo.toml --no-default-features
 cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --no-default-features -- -D warnings
 ```

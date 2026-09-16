@@ -14,7 +14,7 @@ import {
  * every frame of a drag. Round-tripping that through a Tauri command would buy
  * nothing the webview's own store does not already give.
  */
-const STORAGE_KEY = "calenpomo.sideWidth";
+const STORAGE_KEY = "wabicalendar.sideWidth";
 
 /** How far one arrow-key press moves the divider. */
 const KEY_STEP_PX = 16;

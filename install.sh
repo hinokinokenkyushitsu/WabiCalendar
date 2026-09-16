@@ -1,13 +1,13 @@
 #!/bin/sh
 #
-# Install CalenPomo and its `calpo` command line tool.
+# Install WabiCalendar and its `wabi` command line tool.
 #
-#   curl -fsSL https://raw.githubusercontent.com/hinokinokenkyushitsu/CalenPomo/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/hinokinokenkyushitsu/WabiCalendar/main/install.sh | sh
 #
 # Environment:
-#   CALENPOMO_VERSION   a tag such as v0.1.0, instead of the latest release
-#   CALENPOMO_BIN_DIR   where `calpo` goes, instead of ~/.local/bin
-#   CALENPOMO_APP_DIR   where the macOS app goes, instead of /Applications
+#   WABICALENDAR_VERSION   a tag such as v0.1.0, instead of the latest release
+#   WABICALENDAR_BIN_DIR   where `wabi` goes, instead of ~/.local/bin
+#   WABICALENDAR_APP_DIR   where the macOS app goes, instead of /Applications
 #
 # Written for POSIX sh so that `| sh` is honest, and wrapped in a function that
 # is only called on the very last line: a download cut off halfway through
@@ -16,7 +16,7 @@
 
 set -eu
 
-REPO=hinokinokenkyushitsu/CalenPomo
+REPO=hinokinokenkyushitsu/WabiCalendar
 API=https://api.github.com/repos/$REPO/releases
 
 say() {
@@ -45,8 +45,8 @@ sha_check() {
 # Every asset's download URL, one per line. Parsed with sed rather than jq
 # because jq is not something an installer may assume.
 release_assets() {
-    if [ -n "${CALENPOMO_VERSION:-}" ]; then
-        url=$API/tags/$CALENPOMO_VERSION
+    if [ -n "${WABICALENDAR_VERSION:-}" ]; then
+        url=$API/tags/$WABICALENDAR_VERSION
     else
         url=$API/latest
     fi
@@ -54,7 +54,7 @@ release_assets() {
     body=$(curl -fsSL "$url" 2> /dev/null) || die "no release to install from at $url"
     # The checksums and signatures are dropped here rather than filtered at
     # every use: `grab` builds a checksum URL out of its subject's, and
-    # calpo-linux-x86_64.sha256 matches every pattern calpo-linux-x86_64 does.
+    # wabi-linux-x86_64.sha256 matches every pattern wabi-linux-x86_64 does.
     printf '%s' "$body" \
         | tr ',' '\n' \
         | sed -n 's/.*"browser_download_url": *"\([^"]*\)".*/\1/p' \
@@ -91,14 +91,14 @@ grab() {
 }
 
 install_cli() {
-    url=$(pick "calpo-$PLATFORM-*")
-    [ -n "$url" ] || die "this release has no calpo build for $PLATFORM"
+    url=$(pick "wabi-$PLATFORM-*")
+    [ -n "$url" ] || die "this release has no wabi build for $PLATFORM"
     grab "$url"
 
     mkdir -p "$BIN_DIR"
-    cp "$WORK/${url##*/}" "$BIN_DIR/calpo"
-    chmod 755 "$BIN_DIR/calpo"
-    say "  calpo -> $BIN_DIR/calpo"
+    cp "$WORK/${url##*/}" "$BIN_DIR/wabi"
+    chmod 755 "$BIN_DIR/wabi"
+    say "  wabi -> $BIN_DIR/wabi"
 }
 
 install_macos() {
@@ -111,7 +111,7 @@ install_macos() {
     [ -n "$app" ] || die "the downloaded archive holds no .app"
 
     # /Applications is group-writable by admins, so this usually needs no sudo.
-    dest=${CALENPOMO_APP_DIR:-/Applications}
+    dest=${WABICALENDAR_APP_DIR:-/Applications}
     [ -w "$dest" ] || dest=$HOME/Applications
     mkdir -p "$dest"
 
@@ -134,13 +134,13 @@ install_linux() {
     grab "$url"
 
     mkdir -p "$BIN_DIR"
-    cp "$WORK/${url##*/}" "$BIN_DIR/CalenPomo.AppImage"
-    chmod 755 "$BIN_DIR/CalenPomo.AppImage"
-    say "  CalenPomo.AppImage -> $BIN_DIR"
+    cp "$WORK/${url##*/}" "$BIN_DIR/WabiCalendar.AppImage"
+    chmod 755 "$BIN_DIR/WabiCalendar.AppImage"
+    say "  WabiCalendar.AppImage -> $BIN_DIR"
 
     # The installed copy, not the downloaded one: curl leaves what it writes
     # unexecutable, and an AppImage that cannot be run cannot be unpacked.
-    desktop_entry "$(icon_from_appimage "$BIN_DIR/CalenPomo.AppImage")"
+    desktop_entry "$(icon_from_appimage "$BIN_DIR/WabiCalendar.AppImage")"
 }
 
 # The icon out of the AppImage itself, so it always matches the build that was
@@ -155,8 +155,8 @@ icon_from_appimage() {
 
     dir=$HOME/.local/share/icons/hicolor/128x128/apps
     mkdir -p "$dir"
-    cp "$found" "$dir/calenpomo.png"
-    printf '%s' calenpomo
+    cp "$found" "$dir/wabicalendar.png"
+    printf '%s' wabicalendar
 }
 
 desktop_entry() {
@@ -167,30 +167,30 @@ desktop_entry() {
     {
         say '[Desktop Entry]'
         say 'Type=Application'
-        say 'Name=CalenPomo'
+        say 'Name=WabiCalendar'
         say 'Comment=Local-first calendar and pomodoro timer'
-        say "Exec=$BIN_DIR/CalenPomo.AppImage"
+        say "Exec=$BIN_DIR/WabiCalendar.AppImage"
         [ -z "$icon" ] || say "Icon=$icon"
         say 'Terminal=false'
         say 'Categories=Office;Calendar;Utility;'
-    } > "$dir/calenpomo.desktop"
+    } > "$dir/wabicalendar.desktop"
 
     # Menus that cache the index will not show it until this runs; menus that do
     # not have the tool do not need it.
     if command -v update-desktop-database > /dev/null 2>&1; then
         update-desktop-database "$dir" > /dev/null 2>&1 || true
     fi
-    say "  desktop entry -> $dir/calenpomo.desktop"
+    say "  desktop entry -> $dir/wabicalendar.desktop"
 }
 
-# `calpo` is no use in a directory the shell will not look in, and ~/.local/bin
+# `wabi` is no use in a directory the shell will not look in, and ~/.local/bin
 # is on the default PATH of many Linux distributions and of no macOS.
 path_hint() {
     case ":$PATH:" in
         *":$BIN_DIR:"*) return 0 ;;
     esac
     say ''
-    say "$BIN_DIR is not on your PATH. To reach calpo, add this to your shell profile:"
+    say "$BIN_DIR is not on your PATH. To reach wabi, add this to your shell profile:"
     say ''
     say "  export PATH=\"$BIN_DIR:\$PATH\""
 }
@@ -215,7 +215,7 @@ main() {
         esac
     fi
 
-    BIN_DIR=${CALENPOMO_BIN_DIR:-$HOME/.local/bin}
+    BIN_DIR=${WABICALENDAR_BIN_DIR:-$HOME/.local/bin}
 
     WORK=$(mktemp -d)
     trap 'rm -rf "$WORK"' EXIT INT TERM
@@ -223,7 +223,7 @@ main() {
     ASSETS=$(release_assets)
     [ -n "$ASSETS" ] || die "that release has no downloadable files"
 
-    say "Installing CalenPomo for $PLATFORM..."
+    say "Installing WabiCalendar for $PLATFORM..."
     if [ "$PLATFORM" = macos ]; then
         install_macos
     else

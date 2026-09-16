@@ -2,7 +2,7 @@
 //!
 //! The arithmetic here is a deliberate mirror of `src/lib/summary.ts`. The two
 //! have to agree: a user who reads "focused 5h15m" in the week view and then
-//! `calpo log --week` is entitled to the same number, and the moment they
+//! `wabi log --week` is entitled to the same number, and the moment they
 //! disagree neither can be trusted. Any change to one belongs in the other.
 //!
 //! Output is plain ASCII on purpose. The labels are the user's own text and may
@@ -237,7 +237,7 @@ pub fn summary_line(summary: &Summary) -> String {
 /// One row per day, then the week's own total.
 ///
 /// Deliberately an overview and not a listing: seven days of every block would
-/// scroll off the screen, and `calpo today` is there for the detail.
+/// scroll off the screen, and `wabi today` is there for the detail.
 pub fn week(
     events: &[CalEvent],
     sessions: &[Session],

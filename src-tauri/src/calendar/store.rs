@@ -78,7 +78,7 @@ pub fn shards(vault: &Vault) -> Result<Vec<YearMonth>> {
 /// RFC 5545 asks the product that wrote a file to identify itself, and a file we
 /// hand to the user should not claim to have come from the library we happen to
 /// build it with.
-const PRODID: &str = "-//Hinoki//CalenPomo//EN";
+const PRODID: &str = "-//Hinoki//WabiCalendar//EN";
 
 /// A new, empty shard of ours.
 ///

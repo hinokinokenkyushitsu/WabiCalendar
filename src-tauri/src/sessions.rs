@@ -48,7 +48,7 @@ pub struct Session {
     pub started_at: DateTime<FixedOffset>,
     pub ended_at: DateTime<FixedOffset>,
     pub outcome: Outcome,
-    /// What the user called it, when they said. Only `calpo start "写论文"`
+    /// What the user called it, when they said. Only `wabi start "写论文"`
     /// sets this — the app's own start button has nowhere to type one — so most
     /// lines carry `null`, written out rather than omitted so that every line
     /// has the same shape for anyone reading the file by hand.
@@ -280,7 +280,7 @@ mod tests {
         );
     }
 
-    /// `calpo start "写论文"` is the only thing that fills this field in, and a
+    /// `wabi start "写论文"` is the only thing that fills this field in, and a
     /// label the user typed is the one part of a record they will go looking
     /// for by eye.
     #[test]

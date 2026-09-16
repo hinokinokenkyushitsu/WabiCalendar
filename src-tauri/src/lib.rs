@@ -8,7 +8,7 @@ pub mod settings;
 pub mod timer;
 pub mod vault;
 
-// The Tauri half. Everything above this line is shared with the `calpo` binary
+// The Tauri half. Everything above this line is shared with the `wabi` binary
 // and has to keep building with Tauri absent from the dependency tree entirely.
 #[cfg(feature = "gui")]
 pub mod commands;
@@ -35,11 +35,11 @@ use crate::integrations::tray;
 #[cfg(feature = "gui")]
 const TICK: Duration = Duration::from_secs(1);
 
-/// Listen for `calpo start`, or carry on without it.
+/// Listen for `wabi start`, or carry on without it.
 ///
 /// Optional in exactly the way the four OS integrations are, and for the same
 /// reason: an app that refused to open because a socket file was in a strange
-/// state would be worse than an app without the shortcut. `calpo` finding nobody
+/// state would be worse than an app without the shortcut. `wabi` finding nobody
 /// home runs its own timer instead, so the cost of this failing is a pomodoro
 /// the app's window does not show, not a lost one.
 ///
@@ -51,17 +51,17 @@ fn serve_cli(app: &tauri::AppHandle, config_dir: &std::path::Path) {
     let server = match ipc::listen(config_dir) {
         Ok(server) => server,
         Err(e) => {
-            eprintln!("calenpomo: `calpo start` cannot reach this window: {e}");
+            eprintln!("wabicalendar: `wabi start` cannot reach this window: {e}");
             return;
         }
     };
 
     let app = app.clone();
     if let Err(e) = std::thread::Builder::new()
-        .name("calenpomo-ipc".to_string())
+        .name("wabicalendar-ipc".to_string())
         .spawn(move || server.serve(|request| commands::handle_ipc(&app, request)))
     {
-        eprintln!("calenpomo: `calpo start` cannot reach this window: {e}");
+        eprintln!("wabicalendar: `wabi start` cannot reach this window: {e}");
     }
 }
 
@@ -86,7 +86,7 @@ pub fn run() {
             // A plain thread rather than an async task: everything here is
             // synchronous, and a `std::sync::MutexGuard` is not `Send`.
             std::thread::Builder::new()
-                .name("calenpomo-timer".to_string())
+                .name("wabicalendar-timer".to_string())
                 .spawn(move || loop {
                     std::thread::sleep(TICK);
                     // Nothing to recover here -- the next tick tries again.

@@ -1,16 +1,16 @@
-# Remove CalenPomo, the `calpo` command, and everything either of them left on
+# Remove WabiCalendar, the `wabi` command, and everything either of them left on
 # this machine.
 #
-#   irm https://raw.githubusercontent.com/hinokinokenkyushitsu/CalenPomo/main/uninstall.ps1 | iex
+#   irm https://raw.githubusercontent.com/hinokinokenkyushitsu/WabiCalendar/main/uninstall.ps1 | iex
 #
 # Environment (settings rather than parameters, because `| iex` has no way to
 # pass parameters through):
-#   CALENPOMO_PURGE = 1     also delete the vault -- your calendar files and
+#   WABICALENDAR_PURGE = 1     also delete the vault -- your calendar files and
 #                           pomodoro records. Asked for separately, and never
 #                           without printing which directory is about to go.
-#   CALENPOMO_YES = 1       do not ask
-#   CALENPOMO_DRY_RUN = 1   list what would go and remove nothing
-#   CALENPOMO_BIN_DIR       where calpo.exe was put, instead of the default
+#   WABICALENDAR_YES = 1       do not ask
+#   WABICALENDAR_DRY_RUN = 1   list what would go and remove nothing
+#   WABICALENDAR_BIN_DIR       where wabi.exe was put, instead of the default
 #
 # Everything is a function until the very last line, for the same reason the
 # shell script does it: a download cut off halfway through should leave a pile
@@ -18,8 +18,8 @@
 
 $ErrorActionPreference = 'Stop'
 
-$Ident = 'com.hinoki.calenpomo'
-$Product = 'CalenPomo'
+$Ident = 'com.hinoki.wabicalendar'
+$Product = 'WabiCalendar'
 
 function Test-Flag {
     param($Name)
@@ -65,14 +65,14 @@ function Get-InstallEntry {
 # binary, not the product, so both spellings are asked for; Windows process
 # names are case-insensitive, which is the only reason one list covers it.
 function Stop-App {
-    $running = Get-Process -Name 'calenpomo', $Product -ErrorAction SilentlyContinue
+    $running = Get-Process -Name 'wabicalendar', $Product -ErrorAction SilentlyContinue
     if (-not $running) { return }
 
-    Write-Host '  asking CalenPomo to quit'
+    Write-Host '  asking WabiCalendar to quit'
     foreach ($p in $running) { $null = $p.CloseMainWindow() }
     Start-Sleep -Seconds 2
 
-    $running = Get-Process -Name 'calenpomo', $Product -ErrorAction SilentlyContinue
+    $running = Get-Process -Name 'wabicalendar', $Product -ErrorAction SilentlyContinue
     if ($running) {
         $running | Stop-Process -Force -ErrorAction SilentlyContinue
         Start-Sleep -Seconds 1
@@ -113,7 +113,7 @@ function Uninstall-Bundle {
     if ($process.ExitCode -ne 0) {
         throw "The uninstaller exited with $($process.ExitCode)"
     }
-    Write-Host '  removed CalenPomo'
+    Write-Host '  removed WabiCalendar'
 
     # _?= is what leaves this behind, so it is ours to clear up.
     if ($Entry.InstallLocation -and (Test-Path -LiteralPath $Entry.InstallLocation)) {
@@ -178,11 +178,11 @@ function Remove-Paths {
 
 function Confirm-Action {
     param($Question)
-    if (Test-Flag 'CALENPOMO_YES') { return $true }
+    if (Test-Flag 'WABICALENDAR_YES') { return $true }
     try {
         $reply = Read-Host "$Question [y/N]"
     } catch {
-        throw 'nothing to ask at; set CALENPOMO_YES=1 if this is what you meant'
+        throw 'nothing to ask at; set WABICALENDAR_YES=1 if this is what you meant'
     }
     $reply -in @('y', 'Y', 'yes', 'YES')
 }
@@ -197,12 +197,12 @@ function Remove-Vault {
     }
     if (-not (Test-Path -LiteralPath $Vault)) {
         Write-Host ''
-        Write-Host "CALENPOMO_PURGE: $Vault is not there."
+        Write-Host "WABICALENDAR_PURGE: $Vault is not there."
         return
     }
 
     Write-Host ''
-    Write-Host 'CALENPOMO_PURGE will delete your calendar files and pomodoro records:'
+    Write-Host 'WABICALENDAR_PURGE will delete your calendar files and pomodoro records:'
     Write-Host ''
     Write-Host "  $Vault"
     Write-Host ''
@@ -221,12 +221,12 @@ function Remove-Vault {
     Write-Host "  removed $Vault"
 }
 
-function Uninstall-CalenPomo {
-    $dryRun = Test-Flag 'CALENPOMO_DRY_RUN'
-    $purge = Test-Flag 'CALENPOMO_PURGE'
+function Uninstall-WabiCalendar {
+    $dryRun = Test-Flag 'WABICALENDAR_DRY_RUN'
+    $purge = Test-Flag 'WABICALENDAR_PURGE'
 
-    $binDir = $env:CALENPOMO_BIN_DIR
-    if (-not $binDir) { $binDir = Join-Path $env:LOCALAPPDATA 'CalenPomo\bin' }
+    $binDir = $env:WABICALENDAR_BIN_DIR
+    if (-not $binDir) { $binDir = Join-Path $env:LOCALAPPDATA 'WabiCalendar\bin' }
 
     # Read before anything is deleted: afterwards nothing is left that knows
     # where the vault was.
@@ -234,7 +234,7 @@ function Uninstall-CalenPomo {
     $entry = Get-InstallEntry
 
     $paths = @(
-        (Join-Path $binDir 'calpo.exe'),
+        (Join-Path $binDir 'wabi.exe'),
         (Get-ConfigDir),
         # WebView2's own storage, which the app never writes to directly.
         (Join-Path $env:LOCALAPPDATA $Ident)
@@ -242,7 +242,7 @@ function Uninstall-CalenPomo {
     $present = @($paths | Where-Object { Test-Path -LiteralPath $_ })
 
     if (-not $entry -and -not $present) {
-        Write-Host 'CalenPomo is not installed here; nothing to remove.'
+        Write-Host 'WabiCalendar is not installed here; nothing to remove.'
         if ($purge) { Remove-Vault -Vault $vault -DryRun $dryRun }
         return
     }
@@ -287,4 +287,4 @@ function Uninstall-CalenPomo {
     Write-Host 'Done.'
 }
 
-Uninstall-CalenPomo
+Uninstall-WabiCalendar

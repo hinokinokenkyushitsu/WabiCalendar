@@ -48,7 +48,7 @@ pub enum AppError {
     /// The CLI equivalent of [`AppError::NoVault`]. Separate because it is the
     /// one place the answer is a sentence the user can act on rather than a
     /// state the UI draws.
-    #[error("no vault configured — open CalenPomo and choose one, or pass --vault <PATH>")]
+    #[error("no vault configured — open WabiCalendar and choose one, or pass --vault <PATH>")]
     VaultUnset,
 
     /// The platform gave us nowhere to look for `settings.toml`.
@@ -66,7 +66,7 @@ pub enum AppError {
     #[error("a repeating event can only be changed by editing its RRULE in the .ics file")]
     RecurringNotEditable,
 
-    /// The local socket between `calpo` and the running app would not
+    /// The local socket between `wabi` and the running app would not
     /// cooperate. `endpoint` is a socket path on unix and a pipe name on
     /// Windows.
     #[error("{endpoint}: {source}")]
@@ -77,8 +77,8 @@ pub enum AppError {
     },
 
     /// Something answered on that socket but did not speak the protocol —
-    /// realistically a `calpo` and an app from different versions.
-    #[error("unexpected answer from the CalenPomo app: {0}")]
+    /// realistically a `wabi` and an app from different versions.
+    #[error("unexpected answer from the WabiCalendar app: {0}")]
     IpcProtocol(String),
 
     /// The app understood the request and said no.
@@ -86,14 +86,14 @@ pub enum AppError {
     /// Never a reason to fall back to doing the thing ourselves: something *is*
     /// listening, so a second timer beside it would be exactly the collision the
     /// socket exists to prevent.
-    #[error("CalenPomo declined: {0}")]
+    #[error("WabiCalendar declined: {0}")]
     IpcRefused(String),
 
     /// Another process is holding the vault's write lock.
     ///
     /// Always transient — the holder releases it as soon as its write finishes —
     /// so this is worth retrying, unlike every other variant here.
-    #[error("another CalenPomo process is writing to {}; try again", .0.display())]
+    #[error("another WabiCalendar process is writing to {}; try again", .0.display())]
     VaultBusy(PathBuf),
 
     #[cfg(feature = "gui")]

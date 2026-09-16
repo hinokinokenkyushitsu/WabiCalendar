@@ -56,17 +56,17 @@ jobs:
           id=$(find_release)
           if [ -z "$id" ]; then
             cat > notes.md <<'NOTES'
-          The app and `calpo` each have a matching `.sha256` beside them.
+          The app and `wabi` each have a matching `.sha256` beside them.
 
           The macOS build is not signed or notarised. The first time you open it,
           right-click the app and choose Open, or run
-          `xattr -dr com.apple.quarantine /Applications/CalenPomo.app`.
+          `xattr -dr com.apple.quarantine /Applications/WabiCalendar.app`.
 
-          `calpo` is the command line half; put it anywhere on your PATH.
+          `wabi` is the command line half; put it anywhere on your PATH.
           NOTES
             id=$(jq -n \
                   --arg tag "$TAG" \
-                  --arg name "CalenPomo $VERSION" \
+                  --arg name "WabiCalendar $VERSION" \
                   --rawfile body notes.md \
                   '{tag_name: $tag, name: $name, draft: true, body: $body}' \
                 | gh api --method POST "repos/$GITHUB_REPOSITORY/releases" \
@@ -99,7 +99,7 @@ jobs:
             # tauri-action uploads it as the .app.tar.gz the updater consumes.
             args: --target universal-apple-darwin --bundles app,dmg
             rust_targets: aarch64-apple-darwin,x86_64-apple-darwin
-            cli: calpo-macos-universal
+            cli: wabi-macos-universal
           - name: Linux (x86_64)
             # Not ubuntu-latest: an AppImage carries whatever glibc it was
             # linked against, so one built on 24.04 refuses to start on 22.04
@@ -107,12 +107,12 @@ jobs:
             os: ubuntu-22.04
             args: --bundles appimage
             rust_targets: ''
-            cli: calpo-linux-x86_64
+            cli: wabi-linux-x86_64
           - name: Windows (x86_64)
             os: windows-latest
             args: --bundles nsis
             rust_targets: ''
-            cli: calpo-windows-x86_64.exe
+            cli: wabi-windows-x86_64.exe
     steps:
       - uses: actions/checkout@v4
 
@@ -150,23 +150,23 @@ jobs:
 
       # Before the bundler, not after: it copies every binary the Cargo package
       # declares into the app, and for a universal build it only lipos the app's
-      # own -- so target/universal-apple-darwin/release/calpo has to be there
+      # own -- so target/universal-apple-darwin/release/wabi has to be there
       # already or bundling stops with "does not exist". The other two platforms
       # need no such help: `cargo build --release` builds both bins in place.
-      - name: Build calpo (universal)
+      - name: Build wabi (universal)
         if: runner.os == 'macOS'
         run: |
           mkdir -p artifacts
           for target in aarch64-apple-darwin x86_64-apple-darwin; do
             cargo build --manifest-path src-tauri/Cargo.toml \
-              --release --no-default-features --bin calpo --target "$target"
+              --release --no-default-features --bin wabi --target "$target"
           done
           universal=src-tauri/target/universal-apple-darwin/release
           mkdir -p "$universal"
-          lipo -create -output "$universal/calpo" \
-            src-tauri/target/aarch64-apple-darwin/release/calpo \
-            src-tauri/target/x86_64-apple-darwin/release/calpo
-          cp "$universal/calpo" "artifacts/${{ matrix.cli }}"
+          lipo -create -output "$universal/wabi" \
+            src-tauri/target/aarch64-apple-darwin/release/wabi \
+            src-tauri/target/x86_64-apple-darwin/release/wabi
+          cp "$universal/wabi" "artifacts/${{ matrix.cli }}"
 
       - name: Build and upload the app
         uses: tauri-apps/tauri-action@v0
@@ -188,15 +188,15 @@ jobs:
           # the v0 tag answers to, and an unknown input is only a warning.)
           includeUpdaterJson: false
 
-      # `calpo` is built and attached by hand -- without the `gui` feature, which
+      # `wabi` is built and attached by hand -- without the `gui` feature, which
       # is what keeps it clear of Tauri's system dependencies.
-      - name: Build calpo
+      - name: Build wabi
         if: runner.os != 'macOS'
         run: |
           mkdir -p artifacts
           cargo build --manifest-path src-tauri/Cargo.toml \
-            --release --no-default-features --bin calpo
-          source=src-tauri/target/release/calpo
+            --release --no-default-features --bin wabi
+          source=src-tauri/target/release/wabi
           if [ "$RUNNER_OS" = Windows ]; then
             source=$source.exe
           fi
@@ -204,7 +204,7 @@ jobs:
 
       # The one piece tauri-action knows nothing about. Checksums for everything,
       # this included, are made by the `finish` job from the uploaded assets.
-      - name: Attach calpo
+      - name: Attach wabi
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |

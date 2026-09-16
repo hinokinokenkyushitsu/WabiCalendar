@@ -27,7 +27,7 @@ pub const LOCK_WAIT: Duration = Duration::from_secs(5);
 pub const SCHEMA_VERSION: u32 = 1;
 
 const DEFAULT_CONFIG: &str = "\
-# CalenPomo vault configuration.
+# WabiCalendar vault configuration.
 # Everything in this vault is plain text on purpose — edit it by hand if you like.
 
 schema_version = 1
@@ -51,7 +51,7 @@ pub struct Vault {
 
 /// Whether two paths name the same vault.
 ///
-/// `calpo --vault ./MyVault` and the app's remembered `/Users/me/MyVault` are
+/// `wabi --vault ./MyVault` and the app's remembered `/Users/me/MyVault` are
 /// one directory spelled two ways, so both sides are resolved before being
 /// compared. When a path cannot be resolved — an unplugged drive, a directory
 /// that is not there — the fallback is to compare what was written, which errs
