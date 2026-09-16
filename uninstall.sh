@@ -1,9 +1,9 @@
 #!/bin/sh
 #
-# Remove CalenPomo, the `calpo` command, and everything either of them left on
+# Remove WabiCalendar, the `wabi` command, and everything either of them left on
 # this machine.
 #
-#   curl -fsSL https://raw.githubusercontent.com/hinokinokenkyushitsu/CalenPomo/main/uninstall.sh | sh -s -- --yes
+#   curl -fsSL https://raw.githubusercontent.com/hinokinokenkyushitsu/WabiCalendar/main/uninstall.sh | sh -s -- --yes
 #
 # Options:
 #   --purge         also delete the vault: your calendar files and pomodoro
@@ -14,8 +14,8 @@
 #   -n, --dry-run   list what would go and remove nothing.
 #
 # Environment:
-#   CALENPOMO_BIN_DIR   where `calpo` was put, instead of ~/.local/bin
-#   CALENPOMO_APP_DIR   where the macOS app was put, instead of /Applications
+#   WABICALENDAR_BIN_DIR   where `wabi` was put, instead of ~/.local/bin
+#   WABICALENDAR_APP_DIR   where the macOS app was put, instead of /Applications
 #
 # POSIX sh, and nothing but definitions until the last line, for the same reason
 # install.sh is: a download cut off halfway through should leave a pile of
@@ -23,12 +23,12 @@
 
 set -eu
 
-IDENT=com.hinoki.calenpomo
-PRODUCT=CalenPomo
+IDENT=com.hinoki.wabicalendar
+PRODUCT=WabiCalendar
 # macOS keys an installed app's leftovers on the bundle identifier, but a binary
 # run straight out of a build directory leaves the same things under its
 # executable name. Both are this app; sweeping one name leaves the other behind.
-EXENAME=calenpomo
+EXENAME=wabicalendar
 
 NL='
 '
@@ -70,7 +70,7 @@ add() {
 collect_macos() {
     # install.sh falls back to ~/Applications when /Applications is not
     # writable, so both are candidates whichever one this machine used.
-    add "${CALENPOMO_APP_DIR:-/Applications}/$PRODUCT.app"
+    add "${WABICALENDAR_APP_DIR:-/Applications}/$PRODUCT.app"
     add "/Applications/$PRODUCT.app"
     add "$HOME/Applications/$PRODUCT.app"
 
@@ -88,8 +88,8 @@ collect_macos() {
 
 collect_linux() {
     add "$BIN_DIR/$PRODUCT.AppImage"
-    add "$HOME/.local/share/applications/calenpomo.desktop"
-    add "$HOME/.local/share/icons/hicolor/128x128/apps/calenpomo.png"
+    add "$HOME/.local/share/applications/wabicalendar.desktop"
+    add "$HOME/.local/share/icons/hicolor/128x128/apps/wabicalendar.png"
     add "$HOME/.config/autostart/$PRODUCT.desktop"
 
     # webkit2gtk's own storage, which the app never writes to directly.
@@ -102,7 +102,7 @@ collect_linux() {
 # was.
 collect_config() {
     add "$CONFIG_DIR"
-    add "$BIN_DIR/calpo"
+    add "$BIN_DIR/wabi"
 }
 
 vault_path() {
@@ -112,10 +112,10 @@ vault_path() {
         "$conf" | head -1
 }
 
-# The bundle's executable is `calenpomo`, not the product name -- Tauri names it
-# after the Cargo bin, and `default-run` makes that the lowercase one -- so on no
-# platform is there a process called CalenPomo to look for. On Linux the AppImage
-# runtime carries its own file name in addition.
+# The bundle's executable is `wabicalendar`, not the product name -- Tauri
+# names it after the Cargo bin, and `default-run` makes that the lowercase one
+# -- so on no platform is there a process called WabiCalendar to look for. On
+# Linux the AppImage runtime carries its own file name in addition.
 app_running() {
     if pgrep -x "$EXENAME" > /dev/null 2>&1; then
         return 0
@@ -130,10 +130,10 @@ app_running() {
 # open, so a file deleted out from under a running app comes straight back.
 quit_app() {
     app_running || return 0
-    say '  asking CalenPomo to quit'
+    say '  asking WabiCalendar to quit'
 
     if [ "$PLATFORM" = macos ]; then
-        # AppleScript addresses the bundle, which *is* named CalenPomo. Sent only
+        # AppleScript addresses the bundle, which *is* named WabiCalendar. Sent only
         # to something already running: `quit app` on an app that is not would
         # launch it first.
         osascript -e "quit app \"$PRODUCT\"" > /dev/null 2>&1 || true
@@ -142,7 +142,7 @@ quit_app() {
     n=0
     while app_running; do
         if [ "$n" -ge 10 ]; then
-            die "CalenPomo is still running; quit it and try again"
+            die "WabiCalendar is still running; quit it and try again"
         fi
         # Three seconds of asking nicely, then insist.
         if [ "$n" -ge 3 ]; then
@@ -222,7 +222,7 @@ path_note() {
     say "These still put $BIN_DIR on your PATH:"
     printf '%s' "$found"
     say 'install.sh never wrote to them, so this does not either. Edit them'
-    say 'yourself if that line was there only for calpo.'
+    say 'yourself if that line was there only for wabi.'
 }
 
 vault_note() {
@@ -295,7 +295,7 @@ main() {
         *) die "$(uname -s) is not one of the systems this installs on" ;;
     esac
 
-    BIN_DIR=${CALENPOMO_BIN_DIR:-$HOME/.local/bin}
+    BIN_DIR=${WABICALENDAR_BIN_DIR:-$HOME/.local/bin}
     if [ "$PLATFORM" = macos ]; then
         CONFIG_DIR="$HOME/Library/Application Support/$IDENT"
     else
@@ -312,7 +312,7 @@ main() {
     collect_config
 
     if [ -z "$TARGETS" ]; then
-        say 'CalenPomo is not installed here; nothing to remove.'
+        say 'WabiCalendar is not installed here; nothing to remove.'
         [ "$PURGE" = 0 ] || purge_vault
         return 0
     fi

@@ -1,4 +1,4 @@
-//! `calpo start` — begin a pomodoro from the terminal.
+//! `wabi start` — begin a pomodoro from the terminal.
 //!
 //! Two ways of doing one thing, and which one runs is not the user's problem:
 //!
@@ -56,7 +56,7 @@ pub fn start(vault: &Vault, config_dir: &Path, options: StartOptions) -> Result<
 
     match ipc::send(config_dir, &request) {
         Ok(Some(Response::Started { planned_sec, label })) => {
-            eprintln!("calpo: CalenPomo is open; it is keeping the time.");
+            eprintln!("wabi: WabiCalendar is open; it is keeping the time.");
             Ok(summary(
                 "started",
                 planned_sec,
@@ -71,8 +71,8 @@ pub fn start(vault: &Vault, config_dir: &Path, options: StartOptions) -> Result<
         // Not "no app": an app we could not reach. Said out loud, because the
         // fallback is only correct if there really is nobody there.
         Err(e) => {
-            eprintln!("calpo: {e}");
-            eprintln!("calpo: running the countdown here instead.");
+            eprintln!("wabi: {e}");
+            eprintln!("wabi: running the countdown here instead.");
             here(vault, config_dir, options)
         }
     }
@@ -96,7 +96,7 @@ fn here(vault: &Vault, config_dir: &Path, options: StartOptions) -> Result<Strin
     let flag = Arc::clone(&interrupted);
     let handled = ctrlc::set_handler(move || flag.store(true, Ordering::SeqCst)).is_ok();
     if !handled {
-        eprintln!("calpo: Ctrl-C will not be able to save this one; stop it in the app instead.");
+        eprintln!("wabi: Ctrl-C will not be able to save this one; stop it in the app instead.");
     }
 
     timer.start_with(options);
@@ -122,7 +122,7 @@ fn here(vault: &Vault, config_dir: &Path, options: StartOptions) -> Result<Strin
     };
     screen.clear();
 
-    // The lock is taken here and not around the countdown: a `calpo today` in
+    // The lock is taken here and not around the countdown: a `wabi today` in
     // another terminal must not have to wait out a 25 minute pomodoro.
     let lock = vault.lock()?;
     let sessions = Sessions::local(vault);
@@ -158,7 +158,7 @@ fn outcome_word(outcome: Outcome) -> &'static str {
     }
 }
 
-/// One line, in the shape `calpo today` uses for a session: fixed-width columns
+/// One line, in the shape `wabi today` uses for a session: fixed-width columns
 /// first, the user's own text last, so that a CJK label cannot pull it out of
 /// line.
 fn summary(state: &str, secs: u64, phase: Phase, label: Option<&str>) -> String {
@@ -190,7 +190,7 @@ fn brief(secs: u64) -> String {
 
 /// The live countdown, redrawn in place.
 ///
-/// Goes to stderr so that `calpo start ... > log` still records the one line
+/// Goes to stderr so that `wabi start ... > log` still records the one line
 /// that matters, and only when stderr is a terminal — a redirected countdown is
 /// thousands of lines of nothing. ASCII and a fixed width, so that erasing it is
 /// exact: the label is deliberately *not* on this line, because nothing here can
@@ -441,7 +441,7 @@ mod tests {
     }
 
     /// The one line that reaches stdout, in the same column order as a session
-    /// row in `calpo today`.
+    /// row in `wabi today`.
     #[test]
     fn the_summary_puts_the_users_own_text_last() {
         let line = summary("completed", 1500, Phase::Work, Some("写论文"));

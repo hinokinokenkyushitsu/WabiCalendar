@@ -307,7 +307,7 @@ fn new_uid() -> String {
         .unwrap_or(0);
     let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
 
-    format!("{nanos}-{}-{seq}@calenpomo", std::process::id())
+    format!("{nanos}-{}-{seq}@wabicalendar", std::process::id())
 }
 
 #[cfg(test)]
@@ -397,7 +397,7 @@ mod tests {
         assert!(text.contains("VERSION:2.0\r\n"), "{text}");
         // Ours, not the library's.
         assert!(
-            text.contains("PRODID:-//Hinoki//CalenPomo//EN\r\n"),
+            text.contains("PRODID:-//Hinoki//WabiCalendar//EN\r\n"),
             "{text}"
         );
         assert_eq!(text.matches("PRODID:").count(), 1, "{text}");

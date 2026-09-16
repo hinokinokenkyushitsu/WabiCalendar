@@ -119,7 +119,7 @@ mod tests {
     #[test]
     fn settings_are_created_even_if_the_config_dir_does_not_exist_yet() {
         let dir = TempDir::new().expect("tempdir");
-        let config_dir = dir.path().join("com.hinoki.calenpomo");
+        let config_dir = dir.path().join("com.hinoki.wabicalendar");
 
         Settings {
             vault_path: Some(PathBuf::from("/tmp/vault")),

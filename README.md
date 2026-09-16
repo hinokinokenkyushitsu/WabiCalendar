@@ -1,4 +1,4 @@
-# CalenPomo
+# WabiCalendar
 
 A local-first desktop app that puts a week calendar and a pomodoro timer side by
 side, so you can see what you planned next to what you actually did.

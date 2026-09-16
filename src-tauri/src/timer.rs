@@ -212,7 +212,7 @@ pub struct Ended {
     pub started_at: SystemTime,
     pub ended_at: SystemTime,
     pub outcome: Outcome,
-    /// What the user called this one, when they said. Only `calpo start` sets
+    /// What the user called this one, when they said. Only `wabi start` sets
     /// it today; the app's own start button has nowhere to type one.
     pub label: Option<String>,
 }
@@ -234,7 +234,7 @@ pub struct StartOptions {
     /// Which phase to begin, in place of the one that was queued.
     ///
     /// `None` — the app's own start button — begins whatever comes next, which
-    /// is how the work/break rhythm advances. `calpo start "写论文"` is the
+    /// is how the work/break rhythm advances. `wabi start "写论文"` is the
     /// other case: it names a thing the user is about to work on, so it has to
     /// mean work even if the app is halfway through a break.
     pub phase: Option<Phase>,
@@ -410,7 +410,7 @@ impl<C: Clock> Timer<C> {
         }
     }
 
-    /// A timer that keeps its state nowhere, for `calpo start` with no app
+    /// A timer that keeps its state nowhere, for `wabi start` with no app
     /// running.
     ///
     /// `timer.json` belongs to the app. Writing to it from a second process
@@ -431,7 +431,7 @@ impl<C: Clock> Timer<C> {
     /// How long the segment under way is meant to run.
     ///
     /// The one-off length wins while there is one, which is what makes
-    /// `calpo start --50m` a single long pomodoro rather than a change to the
+    /// `wabi start --50m` a single long pomodoro rather than a change to the
     /// user's settings.
     fn planned(&self) -> Duration {
         self.override_planned.unwrap_or(match self.phase {
@@ -1396,7 +1396,7 @@ mod tests {
         assert!(t.take_ended().is_empty());
     }
 
-    /// `calpo start x --50m` asks for one long pomodoro, not for a new setting:
+    /// `wabi start x --50m` asks for one long pomodoro, not for a new setting:
     /// the break after it, and every segment after that, are the configured
     /// lengths again.
     #[test]
@@ -1430,7 +1430,7 @@ mod tests {
     }
 
     /// The whole point of a one-off length: it must not reach `set_durations`,
-    /// or `calpo start x --50m` would quietly rewrite the app's settings.
+    /// or `wabi start x --50m` would quietly rewrite the app's settings.
     #[test]
     fn a_one_off_length_leaves_the_configured_durations_alone() {
         let dir = TempDir::new().expect("tempdir");
@@ -1551,7 +1551,7 @@ mod tests {
         assert_eq!(ended[0].planned_sec, 90);
     }
 
-    /// `calpo start "写论文"` names something to work on, so it means work even
+    /// `wabi start "写论文"` names something to work on, so it means work even
     /// if the app is in the middle of a break -- and the break it interrupts is
     /// still a break that happened.
     #[test]

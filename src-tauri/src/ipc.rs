@@ -1,5 +1,5 @@
-//! The one socket in the app: how `calpo start` hands a pomodoro to a running
-//! CalenPomo.
+//! The one socket in the app: how `wabi start` hands a pomodoro to a running
+//! WabiCalendar.
 //!
 //! This is not a network. It is a Unix domain socket beside `settings.toml`, or
 //! a named pipe on Windows — a local IPC primitive with no address that anything
@@ -11,7 +11,7 @@
 //! moment, but the *timer* is not a file: while the app runs it lives in memory
 //! and rewrites `timer.json` every ten seconds, so a second process that started
 //! its own countdown would simply be overwritten and forgotten. The only way for
-//! `calpo start` to mean anything while the app is up is to ask the app to do
+//! `wabi start` to mean anything while the app is up is to ask the app to do
 //! it.
 //!
 //! One connection carries one request and one reply, each a single line of JSON,
@@ -63,7 +63,7 @@ pub enum Request {
         ///
         /// The app writes the session, so it decides where it lands. If the two
         /// disagree the answer is [`Response::Refused`] and not a guess:
-        /// `calpo --vault /elsewhere start` silently recording into the vault
+        /// `wabi --vault /elsewhere start` silently recording into the vault
         /// the app happens to have open is the one outcome nobody could debug.
         vault: Option<PathBuf>,
     },
@@ -123,7 +123,7 @@ fn endpoint(config_dir: &Path) -> Result<(Name<'static>, String)> {
     {
         use interprocess::local_socket::{GenericNamespaced, ToNsName};
 
-        let shown = format!("calenpomo-{:016x}", fingerprint(config_dir));
+        let shown = format!("wabicalendar-{:016x}", fingerprint(config_dir));
         let name = shown
             .clone()
             .to_ns_name::<GenericNamespaced>()
@@ -216,7 +216,7 @@ pub struct Server {
     endpoint: String,
 }
 
-/// Claim the socket, so that `calpo start` reaches this process.
+/// Claim the socket, so that `wabi start` reaches this process.
 ///
 /// A socket file left behind by an app that crashed would otherwise make this
 /// fail forever, so `AddrInUse` is answered by trying to *connect*: if something
@@ -275,11 +275,11 @@ impl Server {
 
         let response = match serde_json::from_str::<Request>(&line) {
             Ok(request) => handler(request),
-            // Answered rather than dropped: a `calpo` newer than this app would
+            // Answered rather than dropped: a `wabi` newer than this app would
             // otherwise see silence, read it as "no app running", and start a
             // second timer beside the one already going.
             Err(e) => Response::Refused {
-                reason: format!("this CalenPomo does not understand the request ({e})"),
+                reason: format!("this WabiCalendar does not understand the request ({e})"),
             },
         };
 
@@ -294,7 +294,7 @@ impl Server {
     ///
     /// Deliberately infallible and deliberately not fatal: this runs on a thread
     /// of its own, and a socket that has gone bad costs the CLI's shortcut, not
-    /// the app. `calpo start` finding nobody home runs its own timer instead.
+    /// the app. `wabi start` finding nobody home runs its own timer instead.
     pub fn serve(self, handler: impl Fn(Request) -> Response) {
         let mut failures = 0;
         while failures < MAX_CONSECUTIVE_FAILURES {

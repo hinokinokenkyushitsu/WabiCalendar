@@ -157,7 +157,7 @@ impl AppState {
     /// The open vault when there is one, and otherwise the path it is about to
     /// open: nothing opens a vault until the frontend asks for its status, so
     /// for the first moments of a launch the settings file is the only one that
-    /// knows. Used to check that `calpo` means the same vault this app does.
+    /// knows. Used to check that `wabi` means the same vault this app does.
     fn vault_destination(&self) -> Option<PathBuf> {
         if let Some(vault) = self.vault().as_ref() {
             return Some(vault.root().to_path_buf());
@@ -170,7 +170,7 @@ impl AppState {
     /// Two locks, for two different neighbours. The mutex is held for the whole
     /// job so that two calendar writes in *this* process cannot interleave a
     /// read-modify-write on the same shard. The vault's file lock does the same
-    /// against the `calpo` binary, which shares the files and not the mutex.
+    /// against the `wabi` binary, which shares the files and not the mutex.
     ///
     /// Reads take the exclusive lock too. It costs a few milliseconds and buys
     /// the guarantee that a `calendar_range` never lands inside a cross-month
@@ -293,7 +293,7 @@ pub fn timer_reset(app: AppHandle) -> Result<TimerState> {
 /// `timer_start`, reached over the local socket instead of from the window.
 ///
 /// This is the whole reason [`crate::ipc`] exists: while the app is up it owns
-/// the timer, so `calpo start` cannot run one of its own without the two writing
+/// the timer, so `wabi start` cannot run one of its own without the two writing
 /// over each other. Asking the app to press its own button is the only version
 /// of this that leaves one countdown, one `timer.json` and one session record.
 ///
@@ -309,7 +309,7 @@ pub fn handle_ipc(app: &AppHandle, request: ipc::Request) -> ipc::Response {
 
     let state = app.state::<AppState>();
 
-    // A `calpo --vault /elsewhere start` that quietly landed in whichever vault
+    // A `wabi --vault /elsewhere start` that quietly landed in whichever vault
     // this window happens to have open would be the one failure nobody could
     // debug from the outside, so the mismatch is reported rather than resolved.
     if let Some(theirs) = vault.as_deref() {
@@ -318,7 +318,7 @@ pub fn handle_ipc(app: &AppHandle, request: ipc::Request) -> ipc::Response {
             Some(ours) => {
                 return ipc::Response::Refused {
                     reason: format!(
-                        "CalenPomo has {} open, but calpo was pointed at {}",
+                        "WabiCalendar has {} open, but wabi was pointed at {}",
                         ours.display(),
                         theirs.display()
                     ),
@@ -326,7 +326,7 @@ pub fn handle_ipc(app: &AppHandle, request: ipc::Request) -> ipc::Response {
             }
             None => {
                 return ipc::Response::Refused {
-                    reason: "CalenPomo has no vault open".to_string(),
+                    reason: "WabiCalendar has no vault open".to_string(),
                 }
             }
         }
@@ -340,7 +340,7 @@ pub fn handle_ipc(app: &AppHandle, request: ipc::Request) -> ipc::Response {
         timer.start_with(StartOptions {
             label: label.clone(),
             planned,
-            // `calpo start` names something to work on, so it means work even
+            // `wabi start` names something to work on, so it means work even
             // if this window is halfway through a break.
             phase: Some(Phase::Work),
         });
@@ -462,7 +462,7 @@ pub fn set_shortcut(app: AppHandle, accelerator: Option<String>) -> Result<Integ
 /// signed bundle, and macOS will drop the notification without a word.
 #[tauri::command]
 pub fn test_notification(app: AppHandle) -> Result<IntegrationReport> {
-    let outcome = integrations::notify::show(&app, "CalenPomo", "Notifications are working.");
+    let outcome = integrations::notify::show(&app, "WabiCalendar", "Notifications are working.");
 
     {
         let state = app.state::<AppState>();

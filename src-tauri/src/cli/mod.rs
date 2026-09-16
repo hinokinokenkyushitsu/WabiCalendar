@@ -1,4 +1,4 @@
-//! The `calpo` command line: the same vault as the app, from a terminal.
+//! The `wabi` command line: the same vault as the app, from a terminal.
 //!
 //! The two reports here are *readers* of files the app also writes, so they take
 //! the vault's write lock exactly as the app does. Reads are locked too, so that
@@ -6,7 +6,7 @@
 //! an event is briefly present in two shards at once.
 //!
 //! `start` is the exception and holds no lock while it runs — a 25 minute
-//! pomodoro is not a write, and a `calpo today` in another terminal must not
+//! pomodoro is not a write, and a `wabi today` in another terminal must not
 //! have to wait one out. It takes the lock at the end, for the one append. See
 //! [`start`] for the other half of that story, which is what happens when the
 //! app is already running.
@@ -39,23 +39,23 @@ use report::DAYS_PER_WEEK;
 /// `app_config_dir()` is `dirs::config_dir()/${identifier}` and nothing else
 /// (`tauri/src/path/desktop.rs`), so this reaches the same place the app does
 /// without asking Tauri — which is the point, since the CLI does not link it.
-pub const APP_IDENTIFIER: &str = "com.hinoki.calenpomo";
+pub const APP_IDENTIFIER: &str = "com.hinoki.wabicalendar";
 
 /// Overrides the remembered vault for one invocation, below `--vault` and above
 /// `settings.toml`.
-pub const VAULT_ENV: &str = "CALENPOMO_VAULT";
+pub const VAULT_ENV: &str = "WABICALENDAR_VAULT";
 
 #[derive(Debug, Parser)]
 #[command(
-    name = "calpo",
+    name = "wabi",
     version,
-    about = "The CalenPomo vault from a terminal.",
-    long_about = "Works on the same vault the CalenPomo app does: iCalendar files under \
+    about = "The WabiCalendar vault from a terminal.",
+    long_about = "Works on the same vault the WabiCalendar app does: iCalendar files under \
                   calendar/ and pomodoro records under sessions/.\n\n\
-                  The vault is the one the app remembers, unless CALENPOMO_VAULT or \
+                  The vault is the one the app remembers, unless WABICALENDAR_VAULT or \
                   --vault says otherwise.\n\n\
-                  While the app is open, `calpo start` asks it to run the pomodoro so \
-                  that only one countdown exists; with the app closed, calpo runs it \
+                  While the app is open, `wabi start` asks it to run the pomodoro so \
+                  that only one countdown exists; with the app closed, wabi runs it \
                   here."
 )]
 pub struct Cli {
@@ -105,7 +105,7 @@ impl From<StartArgs> for StartOptions {
         Self {
             label: args.label,
             planned: args.planned,
-            // Named work, not "whatever comes next": `calpo start "写论文"` says
+            // Named work, not "whatever comes next": `wabi start "写论文"` says
             // what the user is about to do, so it has to mean work even when the
             // app is halfway through a break.
             phase: Some(Phase::Work),
@@ -136,7 +136,7 @@ pub fn config_dir() -> Result<PathBuf> {
         .ok_or(AppError::NoConfigDir)
 }
 
-/// `--vault`, then `CALENPOMO_VAULT`, then whatever the app remembers.
+/// `--vault`, then `WABICALENDAR_VAULT`, then whatever the app remembers.
 ///
 /// Opening rebuilds a missing skeleton exactly as the app's `set_vault` does,
 /// and — just as deliberately — will not create the root directory: a CLI that
@@ -156,7 +156,7 @@ fn open_vault(explicit: Option<PathBuf>) -> Result<Vault> {
         // On stderr, so that piping the report somewhere still shows this and
         // still yields clean data on stdout.
         eprintln!(
-            "calpo: rebuilt in {}: {}",
+            "wabi: rebuilt in {}: {}",
             vault.root().display(),
             report.created.join(", ")
         );
@@ -298,7 +298,7 @@ fn run(cli: Cli) -> Result<String> {
 
 /// Write the report out, treating a closed pipe as the reader's decision.
 ///
-/// `print!` panics on `EPIPE`, so `calpo log | head` would end in a Rust panic
+/// `print!` panics on `EPIPE`, so `wabi log | head` would end in a Rust panic
 /// message rather than silence. A reader that has seen enough is not an error
 /// to report.
 fn emit(text: &str) -> ExitCode {
@@ -310,19 +310,19 @@ fn emit(text: &str) -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) if e.kind() == io::ErrorKind::BrokenPipe => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("calpo: {e}");
+            eprintln!("wabi: {e}");
             ExitCode::FAILURE
         }
     }
 }
 
-/// The `calpo` entry point.
+/// The `wabi` entry point.
 pub fn main() -> ExitCode {
     let args = expand_bare_duration(std::env::args_os());
     match run(Cli::parse_from(args)) {
         Ok(text) => emit(&text),
         Err(e) => {
-            eprintln!("calpo: {e}");
+            eprintln!("wabi: {e}");
             ExitCode::FAILURE
         }
     }
@@ -358,11 +358,11 @@ mod tests {
     #[test]
     fn a_bare_duration_flag_becomes_one_clap_can_read() {
         assert_eq!(
-            expanded(&["calpo", "start", "写论文", "--25m"]),
-            vec!["calpo", "start", "写论文", "--for=25m"]
+            expanded(&["wabi", "start", "写论文", "--25m"]),
+            vec!["wabi", "start", "写论文", "--for=25m"]
         );
-        assert_eq!(expanded(&["calpo", "start", "--90s"]), {
-            vec!["calpo", "start", "--for=90s"]
+        assert_eq!(expanded(&["wabi", "start", "--90s"]), {
+            vec!["wabi", "start", "--for=90s"]
         });
     }
 
@@ -371,14 +371,14 @@ mod tests {
     #[test]
     fn every_other_argument_is_left_exactly_as_it_was() {
         let untouched = [
-            "calpo", "log", "--week", "2", "--vault", "/tmp/v", "-d", "5m",
+            "wabi", "log", "--week", "2", "--vault", "/tmp/v", "-d", "5m",
         ];
         assert_eq!(expanded(&untouched), untouched.to_vec());
 
         // A label that looks like a flag is still a label after `--`.
         assert_eq!(
-            expanded(&["calpo", "start", "--", "--25m"]),
-            vec!["calpo", "start", "--", "--25m"]
+            expanded(&["wabi", "start", "--", "--25m"]),
+            vec!["wabi", "start", "--", "--25m"]
         );
     }
 
@@ -386,8 +386,8 @@ mod tests {
     /// top of it, not the only way in.
     #[test]
     fn the_shorthand_and_the_flag_parse_to_the_same_thing() {
-        let long = Cli::parse_from(expanded(&["calpo", "start", "x", "--for", "25m"]));
-        let short = Cli::parse_from(expanded(&["calpo", "start", "x", "--25m"]));
+        let long = Cli::parse_from(expanded(&["wabi", "start", "x", "--for", "25m"]));
+        let short = Cli::parse_from(expanded(&["wabi", "start", "x", "--25m"]));
 
         let planned = |cli: Cli| match cli.command {
             Command::Start(args) => StartOptions::from(args).planned,
@@ -401,7 +401,7 @@ mod tests {
     /// set to, which only the app knows.
     #[test]
     fn a_start_with_no_length_asks_for_no_particular_length() {
-        let cli = Cli::parse_from(["calpo", "start"]);
+        let cli = Cli::parse_from(["wabi", "start"]);
 
         match cli.command {
             Command::Start(args) => {

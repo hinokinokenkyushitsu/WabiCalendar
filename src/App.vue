@@ -70,7 +70,7 @@ const placeholder = computed(() => {
          one, which is why it is outside everything the vault gates. -->
     <aside class="side" :style="{ width: `${sideWidth}px` }">
       <header class="side__bar">
-        <h1>CalenPomo</h1>
+        <h1>WabiCalendar</h1>
         <button
           class="gear"
           :title="`Settings (${settingsHint})`"

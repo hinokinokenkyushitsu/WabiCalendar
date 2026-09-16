@@ -64,7 +64,7 @@ async fn run(app: &AppHandle, item: Option<&MenuItem<Wry>>) -> Result<()> {
     let Some(update) = app.updater()?.check().await? else {
         app.dialog()
             .message(format!(
-                "CalenPomo {} is the latest version.",
+                "WabiCalendar {} is the latest version.",
                 app.package_info().version
             ))
             .title("Up to date")
@@ -75,7 +75,7 @@ async fn run(app: &AppHandle, item: Option<&MenuItem<Wry>>) -> Result<()> {
     let install = app
         .dialog()
         .message(format!(
-            "CalenPomo {} is available. This one is {}.\n\n\
+            "WabiCalendar {} is available. This one is {}.\n\n\
              It will be downloaded and the app will restart.",
             update.version, update.current_version
         ))

@@ -192,7 +192,7 @@ pub fn render(app: &AppHandle, state: &TimerState) {
         ),
         RunState::Invalidated => (String::new(), "Last segment voided by sleep".to_string()),
     };
-    let tooltip = format!("CalenPomo — {phase} {remaining}");
+    let tooltip = format!("WabiCalendar — {phase} {remaining}");
     let toggle = match state.run {
         RunState::Running => "Pause",
         RunState::Paused => "Resume",

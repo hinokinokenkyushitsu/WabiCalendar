@@ -1,10 +1,10 @@
-# Install CalenPomo and its `calpo` command line tool.
+# Install WabiCalendar and its `wabi` command line tool.
 #
-#   irm https://raw.githubusercontent.com/hinokinokenkyushitsu/CalenPomo/main/install.ps1 | iex
+#   irm https://raw.githubusercontent.com/hinokinokenkyushitsu/WabiCalendar/main/install.ps1 | iex
 #
 # Environment:
-#   CALENPOMO_VERSION   a tag such as v0.1.0, instead of the latest release
-#   CALENPOMO_BIN_DIR   where calpo.exe goes, instead of %LOCALAPPDATA%\CalenPomo\bin
+#   WABICALENDAR_VERSION   a tag such as v0.1.0, instead of the latest release
+#   WABICALENDAR_BIN_DIR   where wabi.exe goes, instead of %LOCALAPPDATA%\WabiCalendar\bin
 #
 # Everything is a function until the very last line, for the same reason the
 # shell script does it: a download cut off halfway through should define some
@@ -16,10 +16,10 @@ $ErrorActionPreference = 'Stop'
 # Invoke-WebRequest spends most of its time drawing this.
 $ProgressPreference = 'SilentlyContinue'
 
-$Repo = 'hinokinokenkyushitsu/CalenPomo'
+$Repo = 'hinokinokenkyushitsu/WabiCalendar'
 
 function Get-ReleaseAssets {
-    $version = $env:CALENPOMO_VERSION
+    $version = $env:WABICALENDAR_VERSION
     $url = if ($version) {
         "https://api.github.com/repos/$Repo/releases/tags/$version"
     } else {
@@ -27,14 +27,14 @@ function Get-ReleaseAssets {
     }
 
     try {
-        $release = Invoke-RestMethod -Uri $url -Headers @{ 'User-Agent' = 'calenpomo-install' }
+        $release = Invoke-RestMethod -Uri $url -Headers @{ 'User-Agent' = 'wabicalendar-install' }
     } catch {
         throw "No release to install from at $url"
     }
 
     # Checksums are found from their subject's name, never matched as assets in
-    # their own right -- calpo-windows-x86_64.exe.sha256 matches every pattern
-    # calpo-windows-x86_64.exe does.
+    # their own right -- wabi-windows-x86_64.exe.sha256 matches every pattern
+    # wabi-windows-x86_64.exe does.
     $release.assets | Where-Object { $_.name -notlike '*.sha256' -and $_.name -notlike '*.sig' }
 }
 
@@ -76,20 +76,20 @@ function Install-App {
     if ($process.ExitCode -ne 0) {
         throw "The installer exited with $($process.ExitCode)"
     }
-    Write-Host '  CalenPomo installed'
+    Write-Host '  WabiCalendar installed'
 }
 
 function Install-Cli {
     param($Assets, $Directory, $BinDir)
 
-    $asset = $Assets | Where-Object { $_.name -like 'calpo-windows-*' } | Select-Object -First 1
-    if (-not $asset) { throw 'This release has no calpo build for Windows' }
+    $asset = $Assets | Where-Object { $_.name -like 'wabi-windows-*' } | Select-Object -First 1
+    if (-not $asset) { throw 'This release has no wabi build for Windows' }
 
     $file = Get-Verified -Asset $asset -Directory $Directory
 
     New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
-    Copy-Item -Path $file -Destination (Join-Path $BinDir 'calpo.exe') -Force
-    Write-Host "  calpo.exe -> $BinDir"
+    Copy-Item -Path $file -Destination (Join-Path $BinDir 'wabi.exe') -Force
+    Write-Host "  wabi.exe -> $BinDir"
 }
 
 function Add-ToPath {
@@ -107,14 +107,14 @@ function Add-ToPath {
     $updated = if ($current) { "$current;$BinDir" } else { $BinDir }
     [Environment]::SetEnvironmentVariable('Path', $updated, 'User')
     Write-Host ''
-    Write-Host "$BinDir was added to your PATH. Open a new terminal to reach calpo."
+    Write-Host "$BinDir was added to your PATH. Open a new terminal to reach wabi."
 }
 
-function Install-CalenPomo {
-    $binDir = if ($env:CALENPOMO_BIN_DIR) {
-        $env:CALENPOMO_BIN_DIR
+function Install-WabiCalendar {
+    $binDir = if ($env:WABICALENDAR_BIN_DIR) {
+        $env:WABICALENDAR_BIN_DIR
     } else {
-        Join-Path $env:LOCALAPPDATA 'CalenPomo\bin'
+        Join-Path $env:LOCALAPPDATA 'WabiCalendar\bin'
     }
 
     $work = Join-Path ([IO.Path]::GetTempPath()) ([IO.Path]::GetRandomFileName())
@@ -124,7 +124,7 @@ function Install-CalenPomo {
         $assets = Get-ReleaseAssets
         if (-not $assets) { throw 'That release has no downloadable files' }
 
-        Write-Host 'Installing CalenPomo for windows...'
+        Write-Host 'Installing WabiCalendar for windows...'
         Install-App -Assets $assets -Directory $work
         Install-Cli -Assets $assets -Directory $work -BinDir $binDir
         Add-ToPath -BinDir $binDir
@@ -136,4 +136,4 @@ function Install-CalenPomo {
     }
 }
 
-Install-CalenPomo
+Install-WabiCalendar
